@@ -3,6 +3,7 @@ using System.Windows.Input;
 using System.Windows.Interop;
 using TransparentTwitchChatWPF.Helpers;
 using Velopack;
+using Velopack.Exceptions;
 using Velopack.Sources;
 using Application = System.Windows.Application;
 using Brushes = System.Windows.Media.Brushes;
@@ -1390,6 +1391,12 @@ public partial class MainWindow : Window, BrowserWindow
 
         try
         {
+            if (!mgr.IsInstalled)
+            {
+                _logger.LogInformation("Portable build detected; skipping Velopack update check.");
+                return;
+            }
+
             var newVersion = await mgr.CheckForUpdatesAsync();
 
             App.Settings.GeneralSettings.LastUpdateCheck = DateTime.Now;
@@ -1430,24 +1437,19 @@ public partial class MainWindow : Window, BrowserWindow
                 }
             }
         }
+        catch (NotInstalledException)
+        {
+            _logger.LogInformation("Application is not installed via Velopack; skipping update check.");
+        }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error checking for updates (Outer Exception)");
+            _logger.LogError(ex, "Error checking for updates");
 
-            if (ex.InnerException != null)
-            {
-                _logger.LogError(ex.InnerException, "INNER EXCEPTION DETAILS");
-            }
-
-            // For debugging, show the full details in the message box
-            string fullErrorDetails = ex.ToString();
-            if (ex.InnerException != null)
-            {
-                fullErrorDetails += "\n\nINNER EXCEPTION:\n" + ex.InnerException.ToString();
-            }
-
-            MessageBox.Show("Error checking for updates:\n" + fullErrorDetails, 
-                "Error while Checking for Update", MessageBoxButton.OK, MessageBoxImage.Error);
+            MessageBox.Show(
+                "Could not check for updates. If you are running a portable build, this is expected.\n\n" + ex.Message,
+                "Update Check",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
         }
 #endif
     }

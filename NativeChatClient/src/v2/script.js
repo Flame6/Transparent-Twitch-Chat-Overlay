@@ -157,6 +157,8 @@ Chat = {
     filterAllowAllVIPs: false,
     filterAllowAllMods: false,
     useEventSubChat: false,
+    receivedEventSubMessage: false,
+    eventSubFallbackTimer: null,
     seventvChannelOnly: true,
     highlightFavoriteWords: false,
     favoriteWords: [],
@@ -2020,6 +2022,12 @@ Chat = {
   handleEventSubMessage: function (payload) {
     if (!payload || !payload.nick || !payload.message) return;
 
+    Chat.info.receivedEventSubMessage = true;
+    if (Chat.info.eventSubFallbackTimer) {
+      clearTimeout(Chat.info.eventSubFallbackTimer);
+      Chat.info.eventSubFallbackTimer = null;
+    }
+
     const tags = payload.tags || {};
     const info = {
       id: tags.id || tags.messageId || "",
@@ -2048,6 +2056,15 @@ Chat = {
         SendInfoText("Connected via EventSub");
         Chat.info.connected = true;
         console.log("Native Chat: EventSub mode active, IRC disabled.");
+
+        Chat.info.eventSubFallbackTimer = setTimeout(function () {
+          if (!Chat.info.receivedEventSubMessage) {
+            console.warn("No EventSub messages received; falling back to IRC.");
+            SendInfoText("EventSub unavailable — using IRC");
+            Chat.info.useEventSubChat = false;
+            Chat.connectIrc();
+          }
+        }, 15000);
         return;
       }
 

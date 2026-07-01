@@ -306,6 +306,30 @@ public class TwitchService : IHostedService, IDisposable
         return false;
     }
 
+    private async Task CreateChatSubscriptionAsync(
+        string subscriptionType,
+        Dictionary<string, string> condition,
+        string token)
+    {
+        try
+        {
+            await _api.Helix.EventSub.CreateEventSubSubscriptionAsync(
+                subscriptionType,
+                "1",
+                condition,
+                EventSubTransportMethod.Websocket,
+                _eventSubWebsocketClient.SessionId,
+                accessToken: token);
+
+            _logger.LogInformation("EventSub subscription created: {SubscriptionType}", subscriptionType);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to create EventSub subscription {SubscriptionType}", subscriptionType);
+            Growl.Warning($"EventSub subscription failed ({subscriptionType}). Check mod permissions and reconnect Twitch.");
+        }
+    }
+
     private Dictionary<string, string> BuildChatCondition()
     {
         return new Dictionary<string, string>
@@ -424,37 +448,10 @@ public class TwitchService : IHostedService, IDisposable
 
             if (App.Settings.GeneralSettings.UseEventSubChat && ShouldUseEventSubChat())
             {
-                await _api.Helix.EventSub.CreateEventSubSubscriptionAsync(
-                    "channel.chat.message",
-                    "1",
-                    chatCondition,
-                    EventSubTransportMethod.Websocket,
-                    _eventSubWebsocketClient.SessionId,
-                    accessToken: token);
-
-                await _api.Helix.EventSub.CreateEventSubSubscriptionAsync(
-                    "channel.chat.message_delete",
-                    "1",
-                    chatCondition,
-                    EventSubTransportMethod.Websocket,
-                    _eventSubWebsocketClient.SessionId,
-                    accessToken: token);
-
-                await _api.Helix.EventSub.CreateEventSubSubscriptionAsync(
-                    "channel.chat.clear",
-                    "1",
-                    chatCondition,
-                    EventSubTransportMethod.Websocket,
-                    _eventSubWebsocketClient.SessionId,
-                    accessToken: token);
-
-                await _api.Helix.EventSub.CreateEventSubSubscriptionAsync(
-                    "channel.chat.clear_user_messages",
-                    "1",
-                    chatCondition,
-                    EventSubTransportMethod.Websocket,
-                    _eventSubWebsocketClient.SessionId,
-                    accessToken: token);
+                await CreateChatSubscriptionAsync("channel.chat.message", chatCondition, token);
+                await CreateChatSubscriptionAsync("channel.chat.message_delete", chatCondition, token);
+                await CreateChatSubscriptionAsync("channel.chat.clear", chatCondition, token);
+                await CreateChatSubscriptionAsync("channel.chat.clear_user_messages", chatCondition, token);
             }
 
             if (App.Settings.GeneralSettings.RedemptionsEnabled)
