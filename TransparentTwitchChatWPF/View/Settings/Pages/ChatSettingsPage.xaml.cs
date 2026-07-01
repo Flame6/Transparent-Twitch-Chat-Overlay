@@ -40,149 +40,27 @@ public partial class ChatSettingsPage : UserControl
 
         this.tbUsername.Text = App.Settings.GeneralSettings.Username;
         this.tb_nativeChatUsername.Text = App.Settings.jChatSettings.Channel;
-        this.tbUsername2.Text = App.Settings.GeneralSettings.Username;
-        this.tbTwitchPopoutUsername.Text = App.Settings.GeneralSettings.Username;
-        this.cbRedemptions.IsChecked = App.Settings.GeneralSettings.RedemptionsEnabled;
+        this.cbUseEventSubChat.IsChecked = App.Settings.GeneralSettings.UseEventSubChat;
+        this.cbSeventvChannelOnly.IsChecked = App.Settings.GeneralSettings.SeventvChannelOnly;
         this.cbRedemptions2.IsChecked = App.Settings.GeneralSettings.RedemptionsEnabled;
-        this.btGetChannelID.IsEnabled = App.Settings.GeneralSettings.RedemptionsEnabled;
-        this.btGetChannelID2.IsEnabled = App.Settings.GeneralSettings.RedemptionsEnabled;
-        this.tbUsername2.IsEnabled = App.Settings.GeneralSettings.RedemptionsEnabled;
-        this.cbFade.IsChecked = App.Settings.GeneralSettings.FadeChat;
-        this.tbFadeTime.Text = App.Settings.GeneralSettings.FadeTime;
-        this.tbFadeTime.IsEnabled = App.Settings.GeneralSettings.FadeChat;
 
-        //this.cbBotActivity.IsChecked = App.Settings.GeneralSettings.ShowBotActivity;
-        this.comboTheme.SelectedIndex = App.Settings.GeneralSettings.ThemeIndex;
-
-        // Twitch Popout Chat settings
-        LoadTwitchPopoutCssSettings();
-
-        this.cbBetterTtv.IsChecked = App.Settings.GeneralSettings.BetterTtv;
-        this.cbBetterTtv_7tv.IsChecked = App.Settings.GeneralSettings.BetterTtv_7tv;
-        this.cbBetterTtv_AdvMenu.IsChecked = App.Settings.GeneralSettings.BetterTtv_AdvEmoteMenu;
-        this.cbFfz.IsChecked = App.Settings.GeneralSettings.FrankerFaceZ;
-
-
-        if (Enum.IsDefined(typeof(ChatTypes), App.Settings.GeneralSettings.ChatType))
-        {
-            var chatType = (ChatTypes)App.Settings.GeneralSettings.ChatType;
-
-            if (chatType == ChatTypes.CustomURL)
-            {
-                this.kapChatGrid.Visibility = Visibility.Hidden;
-                this.twitchPopoutChat.Visibility = Visibility.Hidden;
-                this.customURLGrid.Visibility = Visibility.Visible;
-                this.jChatGrid.Visibility = Visibility.Hidden;
-
-                this.tbURL.Text = App.Settings.GeneralSettings.CustomURL;
-                this.tbCSS2.Text = App.Settings.GeneralSettings.CustomCSS;
-            }
-            else if (chatType == ChatTypes.TwitchPopout)
-            {
-                this.kapChatGrid.Visibility = Visibility.Hidden;
-                this.twitchPopoutChat.Visibility = Visibility.Visible;
-                this.customURLGrid.Visibility = Visibility.Hidden;
-                this.jChatGrid.Visibility = Visibility.Hidden;
-            }
-            else if (chatType == ChatTypes.KapChat)
-            {
-                this.kapChatGrid.Visibility = Visibility.Visible;
-                this.twitchPopoutChat.Visibility = Visibility.Hidden;
-                this.customURLGrid.Visibility = Visibility.Hidden;
-                this.jChatGrid.Visibility = Visibility.Hidden;
-
-                this.tbURL.Text = string.Empty;
-
-                if (string.IsNullOrEmpty(App.Settings.GeneralSettings.CustomCSS))
-                {
-                    this.tbCSS.Text = CustomCSS_Defaults.NoneTheme_CustomCSS;
-                }
-                else
-                {
-                    this.tbCSS.Text = App.Settings.GeneralSettings.CustomCSS;
-                }
-            }
-            else if (chatType == ChatTypes.KapChat)
-            {
-                this.kapChatGrid.Visibility = Visibility.Hidden;
-                this.twitchPopoutChat.Visibility = Visibility.Hidden;
-                this.customURLGrid.Visibility = Visibility.Hidden;
-                this.jChatGrid.Visibility = Visibility.Visible;
-
-                this.tbURL.Text = string.Empty;
-            }
-        }
+        this.kapChatGrid.Visibility = Visibility.Collapsed;
+        this.twitchPopoutChat.Visibility = Visibility.Collapsed;
+        this.customURLGrid.Visibility = Visibility.Collapsed;
+        this.jChatGrid.Visibility = Visibility.Visible;
     }
 
     public void SaveValues()
     {
-        //this.config.RedemptionsEnabled = false;
-
-        if (Enum.IsDefined(typeof(ChatTypes), App.Settings.GeneralSettings.ChatType))
-        {
-            var chatType = (ChatTypes)App.Settings.GeneralSettings.ChatType;
-
-            if (chatType == ChatTypes.CustomURL)
-            {
-                App.Settings.GeneralSettings.CustomURL = this.tbURL.Text;
-
-                if (!string.IsNullOrWhiteSpace(this.tbCSS2.Text) && !string.IsNullOrEmpty(this.tbCSS2.Text)
-                    && (this.tbCSS2.Text.ToLower() != "css"))
-                {
-                    App.Settings.GeneralSettings.CustomCSS = this.tbCSS2.Text;
-                }
-                else
-                    App.Settings.GeneralSettings.CustomCSS = string.Empty;
-            }
-            else if (chatType == ChatTypes.TwitchPopout)
-            {
-                if (string.IsNullOrEmpty(this.tbTwitchPopoutUsername.Text) || string.IsNullOrWhiteSpace(this.tbTwitchPopoutUsername.Text))
-                {
-                    this.tbTwitchPopoutUsername.Text = "username";
-                }
-                App.Settings.GeneralSettings.Username = this.tbTwitchPopoutUsername.Text;
-
-                if (this.cbUseDefaultPopoutCSS.IsChecked ?? false)
-                {
-                    App.Settings.GeneralSettings.UseDefaultTwitchPopoutCSS = true;
-                }
-                else
-                {
-                    App.Settings.GeneralSettings.UseDefaultTwitchPopoutCSS = false;
-                    App.Settings.GeneralSettings.TwitchPopoutCSS = this.tbPopoutCSS.Text;
-                }
-
-                App.Settings.GeneralSettings.BetterTtv = this.cbBetterTtv.IsChecked ?? false;
-                App.Settings.GeneralSettings.BetterTtv_7tv = this.cbBetterTtv_7tv.IsChecked ?? false;
-                App.Settings.GeneralSettings.BetterTtv_AdvEmoteMenu = this.cbBetterTtv_AdvMenu.IsChecked ?? false;
-                App.Settings.GeneralSettings.FrankerFaceZ = this.cbFfz.IsChecked ?? false;
-            }
-            else if (chatType == ChatTypes.KapChat)
-            {
-                App.Settings.GeneralSettings.Username = this.tbUsername.Text;
-                App.Settings.GeneralSettings.RedemptionsEnabled = this.cbRedemptions.IsChecked ?? false;
-                App.Settings.GeneralSettings.FadeChat = this.cbFade.IsChecked ?? false;
-                App.Settings.GeneralSettings.FadeTime = this.tbFadeTime.Text;
-                //App.Settings.GeneralSettings.ShowBotActivity = this.cbBotActivity.IsChecked ?? false;
-                App.Settings.GeneralSettings.ChatNotificationSound = this.comboChatSound.SelectedValue.ToString();
-                App.Settings.GeneralSettings.ThemeIndex = this.comboTheme.SelectedIndex;
-
-                if (App.Settings.GeneralSettings.ThemeIndex == 0)
-                {
-                    App.Settings.GeneralSettings.CustomCSS = this.tbCSS.Text;
-                }
-            }
-            else if (chatType == ChatTypes.NativeChat)
-            {
-                App.Settings.GeneralSettings.Username = this.tb_nativeChatUsername.Text;
-                App.Settings.jChatSettings.Channel = this.tb_nativeChatUsername.Text;
-                App.Settings.GeneralSettings.jChatURL = string.Empty;
-                App.Settings.GeneralSettings.RedemptionsEnabled = this.cbRedemptions2.IsChecked ?? false;
-                if (App.Settings.GeneralSettings.RedemptionsEnabled)
-                    App.Settings.GeneralSettings.Username = this.tbUsername2.Text;
-                App.Settings.GeneralSettings.ChatNotificationSound = this.comboChatSound2.SelectedValue.ToString();
-            }
-        }
+        App.Settings.GeneralSettings.ChatType = (int)ChatTypes.NativeChat;
+        App.Settings.GeneralSettings.Username = this.tb_nativeChatUsername.Text;
+        App.Settings.jChatSettings.Channel = this.tb_nativeChatUsername.Text;
+        App.Settings.GeneralSettings.UseEventSubChat = this.cbUseEventSubChat.IsChecked ?? true;
+        App.Settings.GeneralSettings.SeventvChannelOnly = this.cbSeventvChannelOnly.IsChecked ?? true;
+        App.Settings.GeneralSettings.jChatURL = string.Empty;
+        App.Settings.GeneralSettings.RedemptionsEnabled = this.cbRedemptions2.IsChecked ?? false;
+        App.Settings.GeneralSettings.ChatNotificationSound = this.comboChatSound2.SelectedValue?.ToString() ?? "None";
+        App.Settings.GeneralSettings.BroadcasterUserId = string.Empty;
     }
 
     public void OnTwitchConnectionStatusChanged(TwitchConnectionStatus twitchConnectionStatus)

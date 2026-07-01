@@ -13,6 +13,7 @@ namespace TransparentTwitchChatWPF
     {
         StringCollection scAllowedUsers = new StringCollection();
         StringCollection scBlockedUsers = new StringCollection();
+        StringCollection scFavoriteWords = new StringCollection();
 
         public ChatFilters()
         {
@@ -22,6 +23,8 @@ namespace TransparentTwitchChatWPF
                 App.Settings.GeneralSettings.AllowedUsersList = new StringCollection();
             if (App.Settings.GeneralSettings.BlockedUsersList == null)
                 App.Settings.GeneralSettings.BlockedUsersList = new StringCollection();
+            if (App.Settings.GeneralSettings.FavoriteWordsList == null)
+                App.Settings.GeneralSettings.FavoriteWordsList = new StringCollection();
 
             foreach (string s in App.Settings.GeneralSettings.AllowedUsersList)
                 scAllowedUsers.Add(s);
@@ -29,17 +32,23 @@ namespace TransparentTwitchChatWPF
             foreach (string s in App.Settings.GeneralSettings.BlockedUsersList)
                 scBlockedUsers.Add(s);
 
+            foreach (string s in App.Settings.GeneralSettings.FavoriteWordsList)
+                scFavoriteWords.Add(s);
+
             refreshListBoxAllowedUsers();
             refreshListBoxBlockedUsers();
+            refreshListBoxFavoriteWords();
 
             this.cbHighlightUsers.IsChecked = App.Settings.GeneralSettings.HighlightUsersChat;
             this.cbAllowedUsers.IsChecked = App.Settings.GeneralSettings.AllowedUsersOnlyChat;
             this.cbAllMods.IsChecked = App.Settings.GeneralSettings.FilterAllowAllMods;
             this.cbAllVIPs.IsChecked = App.Settings.GeneralSettings.FilterAllowAllVIPs;
             this.cbBlockBotActivity.IsChecked = App.Settings.GeneralSettings.BlockBotActivity;
+            this.cbHighlightFavoriteWords.IsChecked = App.Settings.GeneralSettings.HighlightFavoriteWords;
             this.colorPicker.SelectedColor = App.Settings.GeneralSettings.ChatHighlightColor;
             this.colorPickerMods.SelectedColor = App.Settings.GeneralSettings.ChatHighlightModsColor;
             this.colorPickerVIPs.SelectedColor = App.Settings.GeneralSettings.ChatHighlightVIPsColor;
+            this.colorPickerWords.SelectedColor = App.Settings.GeneralSettings.ChatHighlightWordsColor;
         }
 
         private void OnClick_RemoveAllowedUsername(object sender, RoutedEventArgs e)
@@ -49,7 +58,6 @@ namespace TransparentTwitchChatWPF
                 this.scAllowedUsers.Remove(this.lvAllowedUsernames.SelectedItem as string);
                 refreshListBoxAllowedUsers();
             }
-            //this.lvWhitelistUsernames.Items.Remove(this.lvWhitelistUsernames.SelectedItem);
         }
 
         private void OnClick_AddAllowedUsername(object sender, RoutedEventArgs e)
@@ -81,6 +89,26 @@ namespace TransparentTwitchChatWPF
             }
         }
 
+        private void OnClick_AddFavoriteWord(object sender, RoutedEventArgs e)
+        {
+            Input inputDialog = new Input();
+            inputDialog.Title = "Favorite Word";
+            if (inputDialog.ShowDialog() == true && !string.IsNullOrWhiteSpace(inputDialog.Channel))
+            {
+                this.scFavoriteWords.Add(inputDialog.Channel.Trim());
+                refreshListBoxFavoriteWords();
+            }
+        }
+
+        private void OnClick_RemoveFavoriteWord(object sender, RoutedEventArgs e)
+        {
+            if (this.lvFavoriteWords.SelectedIndex >= 0)
+            {
+                this.scFavoriteWords.Remove(this.lvFavoriteWords.SelectedItem as string);
+                refreshListBoxFavoriteWords();
+            }
+        }
+
         private void refreshListBoxAllowedUsers()
         {
             this.lvAllowedUsernames.Focus();
@@ -107,6 +135,19 @@ namespace TransparentTwitchChatWPF
             this.lvBlockedUsernames.Focus();
         }
 
+        private void refreshListBoxFavoriteWords()
+        {
+            this.lvFavoriteWords.Focus();
+            this.lvFavoriteWords.UnselectAll();
+            this.lvFavoriteWords.Items.Clear();
+
+            foreach (string s in this.scFavoriteWords)
+                this.lvFavoriteWords.Items.Add(s);
+
+            this.lvFavoriteWords.UnselectAll();
+            this.lvFavoriteWords.Focus();
+        }
+
         private void OKButton_Click(object sender, RoutedEventArgs e)
         {
             App.Settings.GeneralSettings.HighlightUsersChat = this.cbHighlightUsers.IsChecked ?? false;
@@ -116,9 +157,12 @@ namespace TransparentTwitchChatWPF
             App.Settings.GeneralSettings.AllowedUsersList = scAllowedUsers;
             App.Settings.GeneralSettings.BlockedUsersList = scBlockedUsers;
             App.Settings.GeneralSettings.BlockBotActivity = this.cbBlockBotActivity.IsChecked ?? false;
+            App.Settings.GeneralSettings.HighlightFavoriteWords = this.cbHighlightFavoriteWords.IsChecked ?? false;
+            App.Settings.GeneralSettings.FavoriteWordsList = scFavoriteWords;
             App.Settings.GeneralSettings.ChatHighlightColor = this.colorPicker.SelectedColor ?? App.Settings.GeneralSettings.ChatHighlightColor;
             App.Settings.GeneralSettings.ChatHighlightModsColor = this.colorPickerMods.SelectedColor ?? App.Settings.GeneralSettings.ChatHighlightModsColor;
             App.Settings.GeneralSettings.ChatHighlightVIPsColor = this.colorPickerVIPs.SelectedColor ?? App.Settings.GeneralSettings.ChatHighlightVIPsColor;
+            App.Settings.GeneralSettings.ChatHighlightWordsColor = this.colorPickerWords.SelectedColor ?? App.Settings.GeneralSettings.ChatHighlightWordsColor;
             DialogResult = true;
         }
 
@@ -168,17 +212,21 @@ namespace TransparentTwitchChatWPF
         {
             switch (this.lvFilters.SelectedIndex)
             {
-                case 0: // Allowed usernames/ Highlighting
+                case 0:
                     filterUsernamesGrid.Visibility = Visibility.Visible;
                     filterBotsGrid.Visibility = Visibility.Hidden;
+                    filterWordsGrid.Visibility = Visibility.Hidden;
                     break;
-                case 1: // Blocked usernames/ Bots
+                case 1:
                     filterUsernamesGrid.Visibility = Visibility.Hidden;
                     filterBotsGrid.Visibility = Visibility.Visible;
+                    filterWordsGrid.Visibility = Visibility.Hidden;
                     break;
-                case 2: // Blocked words
+                case 2:
+                    filterUsernamesGrid.Visibility = Visibility.Hidden;
+                    filterBotsGrid.Visibility = Visibility.Hidden;
+                    filterWordsGrid.Visibility = Visibility.Visible;
                     break;
-
             }
         }
     }

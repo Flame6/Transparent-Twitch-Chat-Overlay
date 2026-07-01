@@ -92,6 +92,7 @@ public partial class ConnectionSettingsPage : UserControl
         TwitchConnectionStatusChanged?.Invoke(new TwitchConnectionStatus(TwitchConnectionStatusState.NotConnected, "Not Connected"));
 
         App.Settings.GeneralSettings.ChannelID = string.Empty;
+        App.Settings.GeneralSettings.BroadcasterUserId = string.Empty;
         App.Settings.GeneralSettings.OAuthToken = string.Empty;
         _api.Settings.AccessToken = string.Empty;
     }
@@ -170,7 +171,7 @@ public partial class ConnectionSettingsPage : UserControl
         string status = "Connected";
         var statusState = TwitchConnectionStatusState.Active;
 
-        if (App.Settings.GeneralSettings.RedemptionsEnabled)
+        if (App.Settings.GeneralSettings.RedemptionsEnabled || App.Settings.GeneralSettings.UseEventSubChat)
         {
             statusState = TwitchConnectionStatusState.Active;
             status += " (Active)";

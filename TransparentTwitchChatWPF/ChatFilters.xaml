@@ -197,6 +197,54 @@
                 Width="75" Grid.Column="1" Click="OnClick_RemoveBlockedUsername" />
         </Grid>
 
+        <Grid Name="filterWordsGrid" Visibility="Hidden" Background="#222" Grid.Column="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="27*"/>
+                <ColumnDefinition Width="265*"/>
+            </Grid.ColumnDefinitions>
+
+            <CheckBox
+                Name="cbHighlightFavoriteWords"
+                Content="Highlight messages containing favorite words"
+                HorizontalAlignment="Left"
+                VerticalAlignment="Top"
+                Margin="20,15,0,0" Grid.ColumnSpan="2"
+                />
+
+            <xctk:ColorPicker
+                Name="colorPickerWords"
+                ui:ThemeManager.RequestedTheme="Dark"
+                HorizontalAlignment="Left"
+                VerticalAlignment="Top"
+                Grid.ColumnSpan="2"
+                Width="200"
+                Margin="50,45,0,0"
+                DisplayColorAndName="True"
+                ShowStandardColors="False"
+                AvailableColorsSortingMode="HueSaturationBrightness" />
+
+            <ListBox Name="lvFavoriteWords"
+                     FontSize="12"
+                     SelectionMode="Single"
+                     Margin="20,165,20,50" Grid.ColumnSpan="2">
+            </ListBox>
+
+            <Button Name="btnAddWord"
+                Content="Add"
+                Height="32"
+                HorizontalAlignment="Left"
+                Margin="20,125,0,0"
+                VerticalAlignment="Top"
+                Width="75" Grid.ColumnSpan="2" Click="OnClick_AddFavoriteWord" />
+            <Button Name="btnRemoveWord"
+                Content="Remove"
+                Height="32"
+                HorizontalAlignment="Left"
+                Margin="80,125,0,0"
+                VerticalAlignment="Top"
+                Width="75" Grid.Column="1" Click="OnClick_RemoveFavoriteWord" />
+        </Grid>
+
         <Grid Grid.Column="1">
             <Button
                 Name="OKButton"

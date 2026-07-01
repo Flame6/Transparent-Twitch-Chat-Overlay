@@ -1,4 +1,5 @@
 ﻿using NAudio.Wave;
+using System;
 using System.Windows;
 using System.Windows.Controls;
 using TransparentTwitchChatWPF.Utils;
@@ -31,6 +32,8 @@ public partial class GeneralSettingsPage : UserControl
         this.cbInteraction.IsChecked = App.Settings.GeneralSettings.AllowInteraction;
         this.cbCheckForUpdates.IsChecked = App.Settings.GeneralSettings.CheckForUpdates;
         this.cbMultiInstance.IsChecked = App.Settings.GeneralSettings.AllowMultipleInstances;
+        this.cbEnablePeriodicTopmostRefresh.IsChecked = App.Settings.GeneralSettings.EnablePeriodicTopmostRefresh;
+        this.tbTopmostRefreshInterval.Text = App.Settings.GeneralSettings.TopmostRefreshIntervalSeconds.ToString();
 
         this.hotkeyInputToggleBorders.Hotkey = App.Settings.GeneralSettings.ToggleBordersHotkey;
         this.hotkeyInputToggleInteractable.Hotkey = App.Settings.GeneralSettings.ToggleInteractableHotkey;
@@ -47,6 +50,10 @@ public partial class GeneralSettingsPage : UserControl
         App.Settings.GeneralSettings.HideTaskbarIcon = this.cbTaskbar.IsChecked ?? false;
         App.Settings.GeneralSettings.AllowInteraction = this.cbInteraction.IsChecked ?? false;
         App.Settings.GeneralSettings.CheckForUpdates = this.cbCheckForUpdates.IsChecked ?? false;
+
+        if (int.TryParse(this.tbTopmostRefreshInterval.Text, out int topmostInterval))
+            App.Settings.GeneralSettings.TopmostRefreshIntervalSeconds = Math.Max(5, topmostInterval);
+        App.Settings.GeneralSettings.EnablePeriodicTopmostRefresh = this.cbEnablePeriodicTopmostRefresh.IsChecked ?? false;
 
         // Hotkeys
         App.Settings.GeneralSettings.ToggleBordersHotkey = hotkeyInputToggleBorders.Hotkey;

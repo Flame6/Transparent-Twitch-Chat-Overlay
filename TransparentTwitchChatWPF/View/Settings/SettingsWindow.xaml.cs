@@ -56,7 +56,7 @@ public partial class SettingsWindow : Window
 
     private async void OKButton_Click(object sender, RoutedEventArgs e)
     {
-        App.Settings.GeneralSettings.ChatType = this.comboChatType.SelectedIndex;
+        App.Settings.GeneralSettings.ChatType = (int)ChatTypes.NativeChat;
 
         _generalSettingsPage.SaveValues();
         _chatSettingsPage.SaveValues();
@@ -69,7 +69,9 @@ public partial class SettingsWindow : Window
 
     private void SetupValues()
     {
-        this.comboChatType.SelectedIndex = App.Settings.GeneralSettings.ChatType;
+        App.Settings.GeneralSettings.ChatType = (int)ChatTypes.NativeChat;
+        this.comboChatType.SelectedIndex = (int)ChatTypes.NativeChat;
+        this.comboChatType.Visibility = Visibility.Collapsed;
     }
 
     private void Window_SourceInitialized(object sender, EventArgs e)

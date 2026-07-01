@@ -137,6 +137,18 @@ public class AppSettings
 
         this.jChatSettings.Vips = vipList.ToArray();
         this.jChatSettings.BlockList = blockList.ToArray();
+        this.jChatSettings.UseEventSubChat = this.GeneralSettings.UseEventSubChat
+            && !string.IsNullOrWhiteSpace(this.GeneralSettings.OAuthToken);
+        this.jChatSettings.SeventvChannelOnly = this.GeneralSettings.SeventvChannelOnly;
+        this.jChatSettings.HighlightFavoriteWords = this.GeneralSettings.HighlightFavoriteWords;
+
+        List<string> favoriteWords = new List<string>();
+        if (this.GeneralSettings.FavoriteWordsList != null)
+        {
+            foreach (string item in this.GeneralSettings.FavoriteWordsList)
+                favoriteWords.Add(item.ToLowerInvariant());
+        }
+        this.jChatSettings.FavoriteWords = favoriteWords.ToArray();
     }
 
     private string GenerateHighlightCSS()
@@ -190,6 +202,21 @@ public class AppSettings
         }
         """;
 
+        // 4. Favorite Words Highlight
+        c = this.GeneralSettings.ChatHighlightWordsColor;
+        aL = 0.1f;
+        aR = (c.A / 255f);
+        rgbaL = string.Format("rgba({0},{1},{2},{3:0.00})", c.R, c.G, c.B, aL);
+        rgbaR = string.Format("rgba({0},{1},{2},{3:0.00})", c.R, c.G, c.B, aR);
+
+        css += $$"""
+
+        .highlightWord {
+            background: linear-gradient(to right, {{rgbaL}}, {{rgbaR}}) !important;
+            border-radius: 4px;
+        }
+        """;
+
         // Append any user-defined custom CSS at the very end
         if (!string.IsNullOrEmpty(this.GeneralSettings.CustomCSS))
         {
@@ -212,7 +239,15 @@ public class GeneralSettings
     public string CustomCSS { get; set; } = string.Empty;
     public string TwitchPopoutCSS { get; set; } = string.Empty;
     public bool UseDefaultTwitchPopoutCSS { get; set; } = true;
-    public int ChatType { get; set; } = 0;
+    public int ChatType { get; set; } = 0; // NativeChat only in this fork
+    public bool UseEventSubChat { get; set; } = true;
+    public string BroadcasterUserId { get; set; } = string.Empty;
+    public bool SeventvChannelOnly { get; set; } = true;
+    public bool HighlightFavoriteWords { get; set; } = true;
+    public StringCollection FavoriteWordsList { get; set; } = new StringCollection();
+    public Color ChatHighlightWordsColor { get; set; } = Color.FromArgb(150, 255, 140, 0); // Orange
+    public bool EnablePeriodicTopmostRefresh { get; set; } = true;
+    public int TopmostRefreshIntervalSeconds { get; set; } = 60;
     public string CustomURL { get; set; } = string.Empty;
     public double ZoomLevel { get; set; } = 1;
     public byte OpacityLevel { get; set; } = 0;
@@ -381,4 +416,16 @@ public class jChatConfig
     public string[] BlockList { get; set; }
     [JsonPropertyName("customCSS")]
     public string CustomCSS { get; set; } = "";
+
+    [JsonPropertyName("useEventSubChat")]
+    public bool UseEventSubChat { get; set; } = true;
+
+    [JsonPropertyName("seventvChannelOnly")]
+    public bool SeventvChannelOnly { get; set; } = true;
+
+    [JsonPropertyName("highlightFavoriteWords")]
+    public bool HighlightFavoriteWords { get; set; } = true;
+
+    [JsonPropertyName("favoriteWords")]
+    public string[] FavoriteWords { get; set; } = Array.Empty<string>();
 }

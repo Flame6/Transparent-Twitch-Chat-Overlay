@@ -43,10 +43,8 @@ const nativeChatHost = window.chrome && window.chrome.webview ? window.chrome.we
 
 if (nativeChatHost) {
 nativeChatHost.addEventListener('message', event => {
-  // The event.data contains the JSON string sent from C#
-  const message = event.data; // event.data is already a JS object
-  
-  // Check the type of the message and handle it
+  const message = event.data;
+
   switch (message.type) {
       case 'config':
           config = message.payload;
@@ -59,20 +57,40 @@ nativeChatHost.addEventListener('message', event => {
           hasReceivedCredentials = true;
           console.log("Credentials received.");
           break;
+
+      case 'chatMessage':
+          if (message.payload) {
+            Chat.handleEventSubMessage(message.payload);
+          }
+          return;
+
+      case 'chatMessageDelete':
+          if (message.payload && message.payload.messageId) {
+            Chat.clearMessage(message.payload.messageId);
+          }
+          return;
+
+      case 'chatClear':
+          Chat.clearWholeChat();
+          return;
+
+      case 'chatClearUser':
+          if (message.payload && message.payload.username) {
+            Chat.clearChat(message.payload.username);
+          }
+          return;
           
       default:
           console.warn("Received unknown message type:", message.type);
           return;
   }
 
-  // Only connect after both objects have been received
   if (hasReceivedConfig && hasReceivedCredentials && !hasStartedNativeChat) {
       hasStartedNativeChat = true;
       console.log(`All data received. Connecting to channel: ${config.channel}`);
       
-      // Apply the settings and connect
       Chat.applySettings(config);
-      Chat.connect(config.channel);
+      Chat.start(config.channel);
   }
 });
 } else {
@@ -138,6 +156,10 @@ Chat = {
     playSound: false,
     filterAllowAllVIPs: false,
     filterAllowAllMods: false,
+    useEventSubChat: false,
+    seventvChannelOnly: true,
+    highlightFavoriteWords: false,
+    favoriteWords: [],
     vips: [],
     blockList: [],
     customCSS: "",
@@ -176,6 +198,8 @@ Chat = {
     // Process lists if they come in as comma-separated strings
     if (cfg.vips && typeof cfg.vips === 'string') this.info.vips = cfg.vips.split(',').map(v => v.trim().toLowerCase());
     if (cfg.blockList && typeof cfg.blockList === 'string') this.info.blockList = cfg.blockList.split(',').map(v => v.trim().toLowerCase());
+    if (cfg.favoriteWords && typeof cfg.favoriteWords === 'string') this.info.favoriteWords = cfg.favoriteWords.split(',').map(v => v.trim().toLowerCase()).filter(Boolean);
+    if (Array.isArray(cfg.favoriteWords)) this.info.favoriteWords = cfg.favoriteWords.map(v => String(v).trim().toLowerCase()).filter(Boolean);
     
     // Apply the dynamic custom CSS generated from C#
     if (this.info.customCSS) {
@@ -267,6 +291,7 @@ Chat = {
 
     $.getJSON(addRandomQueryString("https://7tv.io/v3/emote-sets/global")).done(
       (res) => {
+        if (Chat.info.seventvChannelOnly) return;
         res?.emotes?.forEach((emote) => {
           const emoteData = emote.data.host.files.pop();
           var link = `https:${emote.data.host.url}/${emoteData.name}`;
@@ -1174,6 +1199,16 @@ Chat = {
 
       const shouldHighlight = Chat.info.highlightUsers && (isExplicitlyAllowed || allowOtherBasedOnTags);
 
+      let shouldHighlightWord = false;
+      if (Chat.info.highlightFavoriteWords && Chat.info.favoriteWords && Chat.info.favoriteWords.length > 0) {
+        const lowerMessage = message.toLowerCase();
+        shouldHighlightWord = Chat.info.favoriteWords.some((word) => {
+          if (!word) return false;
+          const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          return new RegExp(`\\b${escaped}\\b`, "i").test(lowerMessage);
+        });
+      }
+
       // Sound Notification Logic
       if (Chat.info.playSound && window.chrome && window.chrome.webview && window.chrome.webview.hostObjects) {
           let shouldPlaySound = (!Chat.info.highlightUsers && !Chat.info.allowedUsersOnly) ||
@@ -1195,6 +1230,9 @@ Chat = {
       // Apply new classes natively
       if (shouldHighlight) {
           $chatLine.addClass(highlightClass || 'highlight');
+      }
+      if (shouldHighlightWord) {
+          $chatLine.addClass('highlightWord');
       }
       if (isSharedChat) {
           $chatLine.addClass('home-chatter');
@@ -1612,7 +1650,7 @@ Chat = {
         }
 
         // Check personal emotes if not YouTube
-        if (!isReplaced && service !== "youtube" && Chat.info.seventvPersonalEmotes[info["user-id"]]) {
+        if (!isReplaced && service !== "youtube" && !Chat.info.seventvChannelOnly && Chat.info.seventvPersonalEmotes[info["user-id"]]) {
           Object.entries(Chat.info.seventvPersonalEmotes[info["user-id"]]).forEach((emote) => {
             if (word === emote[0]) {
               let replacement;
@@ -1975,76 +2013,113 @@ Chat = {
 
   clearMessage: function (id) {
     setTimeout(function () {
-      $(".chat_line[data-id=" + id + "]").remove();
+      $(".chat_line[data-id='" + id + "']").remove();
     }, 100);
   },
 
-  connect: function (channel) {
+  handleEventSubMessage: function (payload) {
+    if (!payload || !payload.nick || !payload.message) return;
+
+    const tags = payload.tags || {};
+    const info = {
+      id: tags.id || tags.messageId || "",
+      badges: tags.badges || "",
+      color: tags.color || "",
+      emotes: tags.emotes || "",
+      mod: tags.mod || "0",
+      subscriber: tags.subscriber || "0",
+      vip: tags.vip || "0",
+      "display-name": tags.displayName || payload.nick,
+      "user-id": tags.userId || tags.user_id || "",
+      "room-id": tags.roomId || tags.room_id || Chat.info.channelID || "",
+      "source-room-id": tags.sourceRoomId || tags.source_room_id || ""
+    };
+
+    Chat.write(payload.nick, info, payload.message, "twitch");
+  },
+
+  start: function (channel) {
     Chat.info.channel = channel;
     var title = $(document).prop("title");
     $(document).prop("title", title + Chat.info.channel);
 
     Chat.load(function () {
-      SendInfoText("Starting Native Chat");
-      console.log("Native Chat: Connecting to IRC server...");
-      var socket = new ReconnectingWebSocket(
-        "wss://irc-ws.chat.twitch.tv",
-        "irc",
-        { reconnectInterval: 2000 }
+      if (Chat.info.useEventSubChat) {
+        SendInfoText("Connected via EventSub");
+        Chat.info.connected = true;
+        console.log("Native Chat: EventSub mode active, IRC disabled.");
+        return;
+      }
+
+      Chat.connectIrc();
+    });
+  },
+
+  connect: function (channel) {
+    Chat.start(channel);
+  },
+
+  connectIrc: function () {
+    SendInfoText("Starting Native Chat");
+    console.log("Native Chat: Connecting to IRC server...");
+    var socket = new ReconnectingWebSocket(
+      "wss://irc-ws.chat.twitch.tv",
+      "irc",
+      { reconnectInterval: 2000 }
+    );
+
+    socket.onopen = function () {
+      console.log("Native Chat: Connected");
+      socket.send("PASS native\r\n");
+      socket.send(
+        "NICK justinfan" + Math.floor(Math.random() * 99999) + "\r\n"
       );
+      socket.send("CAP REQ :twitch.tv/commands twitch.tv/tags\r\n");
+      socket.send("JOIN #" + Chat.info.channel + "\r\n");
+    };
 
-      socket.onopen = function () {
-        console.log("Native Chat: Connected");
-        socket.send("PASS native\r\n");
-        socket.send(
-          "NICK justinfan" + Math.floor(Math.random() * 99999) + "\r\n"
-        );
-        socket.send("CAP REQ :twitch.tv/commands twitch.tv/tags\r\n");
-        socket.send("JOIN #" + Chat.info.channel + "\r\n");
-      };
+    socket.onclose = function () {
+      console.log("Native Chat: Disconnected");
+    };
 
-      socket.onclose = function () {
-        console.log("Native Chat: Disconnected");
-      };
+    socket.onmessage = function (data) {
+      data.data.split("\r\n").forEach((line) => {
+        if (!line) return;
+        var message = window.parseIRC(line);
+        if (!message.command) return;
 
-      socket.onmessage = function (data) {
-        data.data.split("\r\n").forEach((line) => {
-          if (!line) return;
-          var message = window.parseIRC(line);
-          if (!message.command) return;
-
-          switch (message.command) {
-            case "PING":
-              socket.send("PONG " + message.params[0]);
+        switch (message.command) {
+          case "PING":
+            socket.send("PONG " + message.params[0]);
+            return;
+          case "JOIN":
+            console.log("Native Chat: Joined channel #" + Chat.info.channel);
+            if (!Chat.info.connected) {
+              Chat.info.connected = true;
+              SendInfoText("Connected to " + Chat.info.channel);
+            }
+            return;
+          case "CLEARMSG":
+            if (message.tags)
+              Chat.clearMessage(message.tags["target-msg-id"]);
+            return;
+          case "CLEARCHAT":
+            console.log(message);
+            if (message.params[1]) {
+              Chat.clearChat(message.params[1]);
+              console.log("Native Chat: Clearing chat of " + message.params[1]);
+            } else {
+              Chat.clearWholeChat();
+              console.log("Native Chat: Clearing chat...");
+            }
+            return;
+          case "PRIVMSG":
+            if (!message.params[1])
               return;
-            case "JOIN":
-              console.log("Native Chat: Joined channel #" + Chat.info.channel);
-              if (!Chat.info.connected) {
-                Chat.info.connected = true;
-                SendInfoText("Connected to " + Chat.info.channel);
-              }
-              return;
-            case "CLEARMSG":
-              if (message.tags)
-                Chat.clearMessage(message.tags["target-msg-id"]);
-              return;
-            case "CLEARCHAT":
-              console.log(message);
-              if (message.params[1]) {
-                Chat.clearChat(message.params[1]);
-                console.log("Native Chat: Clearing chat of " + message.params[1]);
-              } else {
-                Chat.clearWholeChat();
-                console.log("Native Chat: Clearing chat...");
-              }
-              return;
-            case "PRIVMSG":
-              if (!message.params[1])
-                return;
-              
-              var nick = Chat.sanitizeUsername(message.prefix.split("@")[0].split("!")[0]);
+            
+            var nick = Chat.sanitizeUsername(message.prefix.split("@")[0].split("!")[0]);
 
-              // #region COMMANDS
+            // #region COMMANDS
 
               // #region REFRESH EMOTES
               if (
@@ -2543,6 +2618,7 @@ Chat = {
               }
 
               if (
+                !Chat.info.seventvChannelOnly &&
                 !Chat.info.seventvPersonalEmotes[message.tags["user-id"]] &&
                 !Chat.info.seventvNoUsers[message.tags["user-id"]] &&
                 !Chat.info.seventvNonSubs[message.tags["user-id"]]
@@ -2563,7 +2639,6 @@ Chat = {
           }
         });
       };
-    });
   },
 };
 

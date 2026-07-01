@@ -85,8 +85,21 @@
                     Unchecked="cbMultiInstance_Unchecked"
                     />
 
-                <Rectangle Height="2" Fill="Gray" Margin="10 5 25 5" />
+                <Rectangle Height="2" Fill="Gray" Margin="10 15 25 5" />
 
+                <Label Margin="15,5,0,0" HorizontalAlignment="Left" Content="Always On Top" FontWeight="Bold" />
+                <CheckBox
+                    Name="cbEnablePeriodicTopmostRefresh"
+                    Content="Periodically refresh always-on-top"
+                    HorizontalAlignment="Left"
+                    Margin="20,5"
+                    />
+                <StackPanel Orientation="Horizontal" Margin="20,5">
+                    <Label Content="Refresh interval (seconds):" VerticalAlignment="Center" />
+                    <TextBox Name="tbTopmostRefreshInterval" Width="60" Margin="8,0,0,0" />
+                </StackPanel>
+
+                <Rectangle Height="2" Fill="Gray" Margin="10 15 25 5" />
                 <Label Margin="15,5,0,0" HorizontalAlignment="Left" Content="Global Hotkeys" FontWeight="Bold" />
                 <Label Margin="15,5,0,0" HorizontalAlignment="Left" FontStyle="Italic" Content="To unset, click Capture Hotkey and press Esc, Delete, or Backspace" />
                 <Label Margin="15,5,0,0" HorizontalAlignment="Left" FontStyle="Italic" Content="Since hotkeys are global, consider using modifier keys" />

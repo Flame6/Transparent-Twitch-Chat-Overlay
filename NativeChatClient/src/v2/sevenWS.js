@@ -17,6 +17,7 @@ async function getOriginsForSetID(setID) {
 
 function subscribeToOrigins(origins, conn) {
     console.log("Subscribing to new origins")
+    if (Chat.info.seventvChannelOnly) return;
     // subscribe to emote events for the origins
     if (origins.length > 0) {
         for (var i = 0; i < origins.length; i++) {
@@ -96,7 +97,7 @@ function seven_ws(channel) {
 
             console.log("Subscribing to origins")
             // subscribe to emote events for the origins
-            if (origins.length > 0) {
+            if (!Chat.info.seventvChannelOnly && origins.length > 0) {
                 for (var i = 0; i < origins.length; i++) {
                     conn.send(JSON.stringify({
                         op: 35, // subscribe opcode
