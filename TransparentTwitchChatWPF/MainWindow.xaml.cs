@@ -255,6 +255,20 @@ public partial class MainWindow : Window, BrowserWindow
         PostNativeChatEvent("chatClearUser", new { username = e.Username, banDuration = e.BanDuration });
     }
 
+    private void PushNativeChatConfig()
+    {
+        if (App.Settings.GeneralSettings.ChatType != (int)ChatTypes.NativeChat)
+            return;
+
+        if (webView?.CoreWebView2 == null)
+            return;
+
+        webView.Dispatcher.Invoke(() =>
+        {
+            new NativeChatProvider().PushConfig(webView.CoreWebView2);
+        });
+    }
+
     private void PostNativeChatEvent(string type, object payload)
     {
         if (App.Settings.GeneralSettings.ChatType != (int)ChatTypes.NativeChat)
@@ -1253,6 +1267,7 @@ public partial class MainWindow : Window, BrowserWindow
         };
 
         settingsWindow.RestoreNativeChatDefaultsRequested += RestoreNativeChatFiles;
+        settingsWindow.NativeChatConfigRefreshRequested += PushNativeChatConfig;
 
         // Settings were saved
         if (settingsWindow.ShowDialog() == true)

@@ -33,6 +33,13 @@ public class NativeChatProvider : IChatProvider
         return Task.CompletedTask;
     }
 
+    public void PushConfig(CoreWebView2 coreWebView2)
+    {
+        SyncChannelSettings();
+        App.Settings.SyncJChatSettings();
+        PostWebMessage(coreWebView2, "config", App.Settings.jChatSettings);
+    }
+
     // --- Helper methods --------------------------
     private void SyncChannelSettings()
     {

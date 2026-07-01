@@ -163,6 +163,8 @@ namespace TransparentTwitchChatWPF
             App.Settings.GeneralSettings.ChatHighlightModsColor = this.colorPickerMods.SelectedColor ?? App.Settings.GeneralSettings.ChatHighlightModsColor;
             App.Settings.GeneralSettings.ChatHighlightVIPsColor = this.colorPickerVIPs.SelectedColor ?? App.Settings.GeneralSettings.ChatHighlightVIPsColor;
             App.Settings.GeneralSettings.ChatHighlightWordsColor = this.colorPickerWords.SelectedColor ?? App.Settings.GeneralSettings.ChatHighlightWordsColor;
+            App.Settings.SyncJChatSettings();
+            App.Settings.Persist();
             DialogResult = true;
         }
 

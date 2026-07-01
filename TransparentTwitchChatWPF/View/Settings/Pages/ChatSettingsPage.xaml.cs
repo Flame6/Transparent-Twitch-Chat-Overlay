@@ -17,6 +17,7 @@ public partial class ChatSettingsPage : UserControl
     public event Action TwitchConnectionPageRequested;
     public event Action AppearancePageRequested;
     public event Action RestoreNativeChatDefaultsRequested;
+    public event Action ChatFiltersApplied;
 
     public ChatSettingsPage()
     {
@@ -323,7 +324,12 @@ public partial class ChatSettingsPage : UserControl
     private void btOpenChatFilterSettings_Click(object sender, RoutedEventArgs e)
     {
         ChatFilters chatFiltersWindow = new ChatFilters();
-        chatFiltersWindow.ShowDialog();
+        if (chatFiltersWindow.ShowDialog() == true)
+        {
+            App.Settings.SyncJChatSettings();
+            App.Settings.Persist();
+            ChatFiltersApplied?.Invoke();
+        }
     }
 
     private void Hyperlink_RequestNavigate(object sender, System.Windows.Navigation.RequestNavigateEventArgs e)

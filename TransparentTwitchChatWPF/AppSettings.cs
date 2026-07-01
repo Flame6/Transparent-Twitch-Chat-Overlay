@@ -114,6 +114,17 @@ public class AppSettings
 
     public void SyncJChatSettings()
     {
+        string watchChannel = this.jChatSettings?.Channel;
+        if (string.IsNullOrWhiteSpace(watchChannel))
+            watchChannel = this.GeneralSettings.Username;
+
+        if (!string.IsNullOrWhiteSpace(watchChannel))
+        {
+            watchChannel = watchChannel.Trim();
+            this.jChatSettings.Channel = watchChannel;
+            this.GeneralSettings.Username = watchChannel;
+        }
+
         this.jChatSettings.HighlightUsers   = this.GeneralSettings.HighlightUsersChat;
         this.jChatSettings.AllowedUsersOnly = this.GeneralSettings.AllowedUsersOnlyChat;
         this.jChatSettings.PlaySound = this.GeneralSettings.ChatNotificationSound?.ToLower() != "none";

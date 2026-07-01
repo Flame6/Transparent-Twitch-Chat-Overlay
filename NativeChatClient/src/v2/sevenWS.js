@@ -54,7 +54,8 @@ function unsubscribeFromOrigins(origins, conn) {
 
 function seven_ws(channel) {
     (async () => {
-        var info = await getUserInfo(Chat.info.channelID);
+        var channelLogin = Chat.getChannelLogin();
+        var info = await getUserInfo(channelLogin);
         var origins = await getOriginsForSetID(info.emoteSetID)
         var id = info.id;
         var emoteSetID = info.emoteSetID;
@@ -193,7 +194,7 @@ function seven_ws(channel) {
                                             }
                                         }
                                     }
-                                    Chat.loadEmotes(Chat.info.channelID);
+                                    Chat.loadEmotes(Chat.info.channelID, Chat.info.channel);
                                     SendInfoText("Emote origin changed")
                                     console.log("Cyan Chat: Emote origin changed, refreshing emotes...");
                                     return
@@ -216,7 +217,7 @@ function seven_ws(channel) {
                             }
                         }
                     } else if (msg.d.type === "user.update") {
-                        Chat.loadEmotes(Chat.info.channelID);
+                        Chat.loadEmotes(Chat.info.channelID, Chat.info.channel);
                         var oldEmoteSetName = msg.d.body.updated[0].value[0].old_value.name
                         var newEmoteSetName = msg.d.body.updated[0].value[0].value.name
                         var newEmoteSetID = msg.d.body.updated[0].value[0].value.id

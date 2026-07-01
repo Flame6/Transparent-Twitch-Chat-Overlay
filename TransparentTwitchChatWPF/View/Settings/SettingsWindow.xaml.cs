@@ -14,6 +14,7 @@ public partial class SettingsWindow : Window
     public event Action<Window> CreateWidgetRequested;
     public event Action CheckForUpdateRequested;
     public event Action RestoreNativeChatDefaultsRequested;
+    public event Action NativeChatConfigRefreshRequested;
 
     private readonly ChatSettingsPage _chatSettingsPage;
     private readonly AppearanceSettingsPage _appearanceSettingsPage;
@@ -62,6 +63,7 @@ public partial class SettingsWindow : Window
         _chatSettingsPage.SaveValues();
         await _appearanceSettingsPage.SaveValues();
 
+        App.Settings.SyncJChatSettings();
         App.Settings.Persist();
 
         DialogResult = true;
@@ -85,6 +87,7 @@ public partial class SettingsWindow : Window
         _chatSettingsPage.TwitchConnectionPageRequested += ShowTwitchConnectionPage;
         _chatSettingsPage.AppearancePageRequested += ShowAppearancePage;
         _chatSettingsPage.RestoreNativeChatDefaultsRequested += () => RestoreNativeChatDefaultsRequested?.Invoke();
+        _chatSettingsPage.ChatFiltersApplied += () => NativeChatConfigRefreshRequested?.Invoke();
 
         _connectionSettingsPage.SetupValues();
         _connectionSettingsPage.TwitchConnectionStatusChanged += _chatSettingsPage.OnTwitchConnectionStatusChanged;

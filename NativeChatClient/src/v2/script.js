@@ -50,6 +50,14 @@ nativeChatHost.addEventListener('message', event => {
           config = message.payload;
           hasReceivedConfig = true;
           console.log("Configuration received:", config);
+
+          if (hasStartedNativeChat) {
+            Chat.applySettings(config);
+            if (config.channel && config.channel !== Chat.info.channel) {
+              console.log(`Channel changed to: ${config.channel}`);
+              Chat.start(config.channel);
+            }
+          }
           break;
 
       case 'credentials':
@@ -88,7 +96,7 @@ nativeChatHost.addEventListener('message', event => {
   if (hasReceivedConfig && hasReceivedCredentials && !hasStartedNativeChat) {
       hasStartedNativeChat = true;
       console.log(`All data received. Connecting to channel: ${config.channel}`);
-      
+
       Chat.applySettings(config);
       Chat.start(config.channel);
   }
@@ -208,12 +216,18 @@ Chat = {
       this.info.seventvChannelOnly = cfg.seventvChannelOnly;
     }
 
+    if (typeof cfg.highlightFavoriteWords === "boolean") {
+      this.info.highlightFavoriteWords = cfg.highlightFavoriteWords;
+    }
+
     if (this.info.seventvChannelOnly) {
       this.info.seventvPersonalEmotes = {};
     }
 
-    if (this.info.seventvChannelOnly && this.info.channelID) {
-      this.loadEmotes(this.info.channelID);
+    this.purgeDisallowedSevenTvEmotes();
+
+    if (this.info.channelID || this.info.channel) {
+      this.loadEmotes(this.info.channelID, this.info.channel);
     }
     
     // Apply the dynamic custom CSS generated from C#
@@ -247,13 +261,34 @@ Chat = {
     }
   },
 
+  getChannelLogin: function () {
+    return String(Chat.info.channel || config.channel || "").trim().toLowerCase();
+  },
+
   isSevenTvEmoteImage: function (image) {
     return typeof image === "string" && image.includes("cdn.7tv.app/emote");
   },
 
-  shouldAllowSevenTvEmote: function (name) {
+  shouldAllowSevenTvEmote: function (name, image) {
     if (!Chat.info.seventvChannelOnly) return true;
-    return Object.prototype.hasOwnProperty.call(Chat.info.seventvChannelEmotes, name);
+
+    if (Chat.isSevenTvEmoteImage(image)) {
+      return Object.prototype.hasOwnProperty.call(Chat.info.seventvChannelEmotes, name);
+    }
+
+    return true;
+  },
+
+  purgeDisallowedSevenTvEmotes: function () {
+    if (!Chat.info.seventvChannelOnly) return;
+
+    Object.keys(Chat.info.emotes).forEach((name) => {
+      const emote = Chat.info.emotes[name];
+      if (Chat.isSevenTvEmoteImage(emote?.image) &&
+          !Object.prototype.hasOwnProperty.call(Chat.info.seventvChannelEmotes, name)) {
+        delete Chat.info.emotes[name];
+      }
+    });
   },
 
   registerSevenTvEmote: function (name, emoteObj, isChannelEmote) {
@@ -266,9 +301,10 @@ Chat = {
     }
   },
 
-  loadEmotes: function (channelID) {
+  loadEmotes: function (channelID, channelLogin) {
     Chat.info.emotes = {};
     Chat.info.seventvChannelEmotes = {};
+    const watchLogin = String(channelLogin || Chat.getChannelLogin() || "").trim().toLowerCase();
     // Load BTTV, FFZ and 7TV emotes
     ["emotes/global", "users/twitch/" + encodeURIComponent(channelID)].forEach(
       (endpoint) => {
@@ -340,22 +376,26 @@ Chat = {
       }
     );
 
-    $.getJSON(
-      addRandomQueryString(
-        "https://7tv.io/v3/users/twitch/" + encodeURIComponent(channelID)
-      )
-    ).done((res) => {
-      res?.emote_set?.emotes?.forEach((emote) => {
-        const emoteData = emote.data.host.files.pop();
-        var link = `https:${emote.data.host.url}/${emoteData.name}`;
-        if (link.endsWith(".gif")) link = link.replace(".gif", ".webp");
-        Chat.registerSevenTvEmote(emote.name, {
-          id: emote.id,
-          image: link,
-          zeroWidth: emote.data.flags == 256,
-        }, true);
+    if (watchLogin) {
+      $.getJSON(
+        addRandomQueryString(
+          "https://7tv.io/v3/users/twitch/" + encodeURIComponent(watchLogin)
+        )
+      ).done((res) => {
+        console.log("7TV channel emotes loaded for login:", watchLogin);
+        res?.emote_set?.emotes?.forEach((emote) => {
+          const emoteData = emote.data.host.files.pop();
+          var link = `https:${emote.data.host.url}/${emoteData.name}`;
+          if (link.endsWith(".gif")) link = link.replace(".gif", ".webp");
+          Chat.registerSevenTvEmote(emote.name, {
+            id: emote.id,
+            image: link,
+            zeroWidth: emote.data.flags == 256,
+          }, true);
+        });
+        Chat.purgeDisallowedSevenTvEmotes();
       });
-    });
+    }
   },
 
   loadPersonalEmotes: async function (channelID) {
@@ -537,7 +577,8 @@ Chat = {
       if (!error) {
         console.log("User ID: " + res.data[0].id);
         Chat.info.channelID = res.data[0].id;
-        Chat.loadEmotes(Chat.info.channelID);
+        Chat.info.channel = (Chat.info.channel || res.data[0].login || config.channel || "").trim().toLowerCase();
+        Chat.loadEmotes(Chat.info.channelID, Chat.info.channel);
         seven_ws(Chat.info.channel);
 
         client_id = res.client_id;
@@ -1709,7 +1750,7 @@ Chat = {
         if (!isReplaced) {
           Object.entries(Chat.info.emotes).forEach((emote) => {
             if (word !== emote[0]) return;
-            if (!Chat.shouldAllowSevenTvEmote(emote[0])) return;
+            if (!Chat.shouldAllowSevenTvEmote(emote[0], emote[1].image)) return;
 
             let replacement;
             if (emote[1].upscale) {
@@ -2084,7 +2125,7 @@ Chat = {
   },
 
   start: function (channel) {
-    Chat.info.channel = channel;
+    Chat.info.channel = String(channel || config.channel || "").trim().toLowerCase();
     var title = $(document).prop("title");
     $(document).prop("title", title + Chat.info.channel);
 
@@ -2193,7 +2234,7 @@ Chat = {
                 
                 if (flag) {
                   SendInfoText("Refreshing emotes...");
-                  Chat.loadEmotes(Chat.info.channelID);
+                  Chat.loadEmotes(Chat.info.channelID, Chat.info.channel);
                   console.log("Native Chat: Refreshing emotes...");
                   return;
                 }
@@ -2581,9 +2622,9 @@ Chat = {
 
                     // Check if it's an emote from the available emotes
                     const emoteFound = Object.entries(Chat.info.emotes).find(
-                      ([emoteName]) =>
+                      ([emoteName, emoteData]) =>
                         emoteName.toLowerCase() === imageSource.toLowerCase() &&
-                        Chat.shouldAllowSevenTvEmote(emoteName)
+                        Chat.shouldAllowSevenTvEmote(emoteName, emoteData.image)
                     );
                     
                     if (emoteFound) {
