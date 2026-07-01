@@ -272,12 +272,12 @@ public class TwitchService : IHostedService, IDisposable
         UnsubscribeFromEvents();
     }
 
-    private async Task EnsureBroadcasterUserIdAsync()
+    private async Task<bool> EnsureBroadcasterUserIdAsync()
     {
         if (!string.IsNullOrWhiteSpace(App.Settings.GeneralSettings.BroadcasterUserId))
         {
             _broadcasterUserId = App.Settings.GeneralSettings.BroadcasterUserId;
-            return;
+            return true;
         }
 
         string channelName = App.Settings.jChatSettings?.Channel;
@@ -285,22 +285,25 @@ public class TwitchService : IHostedService, IDisposable
             channelName = App.Settings.GeneralSettings.Username;
 
         if (string.IsNullOrWhiteSpace(channelName))
-            return;
+            return false;
 
         try
         {
             var users = await _api.Helix.Users.GetUsersAsync(logins: new List<string> { channelName });
-            if (users?.Users?.Count > 0)
+            if (users?.Users != null && users.Users.Any())
             {
                 _broadcasterUserId = users.Users[0].Id;
                 App.Settings.GeneralSettings.BroadcasterUserId = _broadcasterUserId;
                 App.Settings.Persist();
+                return true;
             }
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to resolve broadcaster user id for channel {Channel}", channelName);
         }
+
+        return false;
     }
 
     private Dictionary<string, string> BuildChatCondition()
@@ -350,8 +353,7 @@ public class TwitchService : IHostedService, IDisposable
         var evt = args.Notification.Payload.Event;
         ChatUserCleared?.Invoke(this, new TwitchChatClearUserEventArgs
         {
-            Username = evt.TargetUserName,
-            BanDuration = evt.BanDuration
+            Username = evt.TargetUserName
         });
         await Task.CompletedTask;
     }
