@@ -169,6 +169,7 @@ Chat = {
     eventSubFallbackTimer: null,
     seventvChannelOnly: true,
     seventvChannelEmotes: {},
+    channelThirdPartyEmotes: {},
     highlightFavoriteWords: false,
     favoriteWords: [],
     vips: [],
@@ -224,7 +225,7 @@ Chat = {
       this.info.seventvPersonalEmotes = {};
     }
 
-    this.purgeDisallowedSevenTvEmotes();
+    this.purgeDisallowedThirdPartyEmotes();
 
     if (this.info.channelID || this.info.channel) {
       this.loadEmotes(this.info.channelID, this.info.channel);
@@ -269,23 +270,42 @@ Chat = {
     return typeof image === "string" && image.includes("cdn.7tv.app/emote");
   },
 
-  shouldAllowSevenTvEmote: function (name, image) {
+  shouldAllowThirdPartyEmote: function (name, image) {
     if (!Chat.info.seventvChannelOnly) return true;
 
     if (Chat.isSevenTvEmoteImage(image)) {
       return Object.prototype.hasOwnProperty.call(Chat.info.seventvChannelEmotes, name);
     }
 
-    return true;
+    return Object.prototype.hasOwnProperty.call(Chat.info.channelThirdPartyEmotes, name);
   },
 
-  purgeDisallowedSevenTvEmotes: function () {
+  registerChannelThirdPartyEmote: function (name, emoteObj) {
+    Chat.info.channelThirdPartyEmotes[name] = emoteObj;
+    Chat.info.emotes[name] = emoteObj;
+  },
+
+  purgeDisallowedThirdPartyEmotes: function () {
     if (!Chat.info.seventvChannelOnly) return;
 
     Object.keys(Chat.info.emotes).forEach((name) => {
       const emote = Chat.info.emotes[name];
-      if (Chat.isSevenTvEmoteImage(emote?.image) &&
-          !Object.prototype.hasOwnProperty.call(Chat.info.seventvChannelEmotes, name)) {
+      if (!emote?.image) return;
+
+      const isSevenTv = Chat.isSevenTvEmoteImage(emote.image);
+      const isThirdParty =
+        isSevenTv ||
+        emote.image.includes("cdn.betterttv.net") ||
+        emote.image.includes("cdn.frankerfacez.com") ||
+        emote.image.includes("ffz.io");
+
+      if (!isThirdParty) return;
+
+      const allowed =
+        Object.prototype.hasOwnProperty.call(Chat.info.seventvChannelEmotes, name) ||
+        Object.prototype.hasOwnProperty.call(Chat.info.channelThirdPartyEmotes, name);
+
+      if (!allowed) {
         delete Chat.info.emotes[name];
       }
     });
@@ -304,9 +324,17 @@ Chat = {
   loadEmotes: function (channelID, channelLogin) {
     Chat.info.emotes = {};
     Chat.info.seventvChannelEmotes = {};
+    Chat.info.channelThirdPartyEmotes = {};
     const watchLogin = String(channelLogin || Chat.getChannelLogin() || "").trim().toLowerCase();
-    // Load BTTV, FFZ and 7TV emotes
-    ["emotes/global", "users/twitch/" + encodeURIComponent(channelID)].forEach(
+    const channelOnly = Chat.info.seventvChannelOnly;
+    const ffzEndpoints = channelOnly
+      ? ["users/twitch/" + encodeURIComponent(channelID)]
+      : ["emotes/global", "users/twitch/" + encodeURIComponent(channelID)];
+    const bttvEndpoints = channelOnly
+      ? ["users/twitch/" + encodeURIComponent(channelID)]
+      : ["emotes/global", "users/twitch/" + encodeURIComponent(channelID)];
+
+    ffzEndpoints.forEach(
       (endpoint) => {
         $.getJSON(
           addRandomQueryString(
@@ -321,17 +349,23 @@ Chat = {
               var imageUrl = emote.images["2x"] || emote.images["1x"];
               var upscale = true;
             }
-            Chat.info.emotes[emote.code] = {
+            const emoteObj = {
               id: emote.id,
               image: imageUrl,
               upscale: upscale,
             };
+            if (channelOnly) {
+              Chat.registerChannelThirdPartyEmote(emote.code, emoteObj);
+            } else {
+              Chat.info.emotes[emote.code] = emoteObj;
+            }
           });
+          Chat.purgeDisallowedThirdPartyEmotes();
         });
       }
     );
 
-    ["emotes/global", "users/twitch/" + encodeURIComponent(channelID)].forEach(
+    bttvEndpoints.forEach(
       (endpoint) => {
         $.getJSON(
           addRandomQueryString("https://api.betterttv.net/3/cached/" + endpoint)
@@ -340,7 +374,7 @@ Chat = {
             res = res.channelEmotes.concat(res.sharedEmotes);
           }
           res.forEach((emote) => {
-            Chat.info.emotes[emote.code] = {
+            const emoteObj = {
               id: emote.id,
               image: "https://cdn.betterttv.net/emote/" + emote.id + "/3x",
               zeroWidth: [
@@ -353,9 +387,14 @@ Chat = {
                 "58487cc6f52be01a7ee5f205",
                 "5849c9c8f52be01a7ee5f79e",
               ].includes(emote.id),
-              // "5e76d338d6581c3724c0f0b2" => cvHazmat, "5e76d399d6581c3724c0f0b8" => cvMask, "567b5b520e984428652809b6" => SoSnowy, "5849c9a4f52be01a7ee5f79d" => IceCold, "567b5c080e984428652809ba" => CandyCane, "567b5dc00e984428652809bd" => ReinDeer, "58487cc6f52be01a7ee5f205" => SantaHat, "5849c9c8f52be01a7ee5f79e" => TopHat
             };
+            if (channelOnly) {
+              Chat.registerChannelThirdPartyEmote(emote.code, emoteObj);
+            } else {
+              Chat.info.emotes[emote.code] = emoteObj;
+            }
           });
+          Chat.purgeDisallowedThirdPartyEmotes();
         });
       }
     );
@@ -393,7 +432,7 @@ Chat = {
             zeroWidth: emote.data.flags == 256,
           }, true);
         });
-        Chat.purgeDisallowedSevenTvEmotes();
+        Chat.purgeDisallowedThirdPartyEmotes();
       });
     }
   },
@@ -1750,7 +1789,7 @@ Chat = {
         if (!isReplaced) {
           Object.entries(Chat.info.emotes).forEach((emote) => {
             if (word !== emote[0]) return;
-            if (!Chat.shouldAllowSevenTvEmote(emote[0], emote[1].image)) return;
+            if (!Chat.shouldAllowThirdPartyEmote(emote[0], emote[1].image)) return;
 
             let replacement;
             if (emote[1].upscale) {
@@ -2624,7 +2663,7 @@ Chat = {
                     const emoteFound = Object.entries(Chat.info.emotes).find(
                       ([emoteName, emoteData]) =>
                         emoteName.toLowerCase() === imageSource.toLowerCase() &&
-                        Chat.shouldAllowSevenTvEmote(emoteName, emoteData.image)
+                        Chat.shouldAllowThirdPartyEmote(emoteName, emoteData.image)
                     );
                     
                     if (emoteFound) {
