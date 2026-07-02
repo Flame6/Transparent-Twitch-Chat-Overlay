@@ -327,11 +327,13 @@ Chat = {
     Chat.info.channelThirdPartyEmotes = {};
     const watchLogin = String(channelLogin || Chat.getChannelLogin() || "").trim().toLowerCase();
     const channelOnly = Chat.info.seventvChannelOnly;
+    // In channel-only mode we ONLY load the 7TV channel emote set for the watched
+    // channel. No BTTV, no FFZ, no global 7TV, no personal 7TV.
     const ffzEndpoints = channelOnly
-      ? ["users/twitch/" + encodeURIComponent(channelID)]
+      ? []
       : ["emotes/global", "users/twitch/" + encodeURIComponent(channelID)];
     const bttvEndpoints = channelOnly
-      ? ["users/twitch/" + encodeURIComponent(channelID)]
+      ? []
       : ["emotes/global", "users/twitch/" + encodeURIComponent(channelID)];
 
     ffzEndpoints.forEach(
