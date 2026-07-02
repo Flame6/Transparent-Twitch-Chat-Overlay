@@ -29,12 +29,14 @@ public partial class ConnectionSettingsPage : UserControl
     public event Action<TwitchConnectionStatus> TwitchConnectionStatusChanged;
 
     private readonly ITwitchAuthService _twitchAuthService;
+    private readonly TwitchService _twitchService;
     private TwitchAPI _api;
 
-    public ConnectionSettingsPage(ITwitchAuthService twitchAuthService)
+    public ConnectionSettingsPage(ITwitchAuthService twitchAuthService, TwitchService twitchService)
     {
         InitializeComponent();
         _twitchAuthService = twitchAuthService;
+        _twitchService = twitchService;
         // Subscribe to the instance event.
         _twitchAuthService.AccessTokenReceived += OnAccessTokenReceived;
 
@@ -92,6 +94,7 @@ public partial class ConnectionSettingsPage : UserControl
         TwitchConnectionStatusChanged?.Invoke(new TwitchConnectionStatus(TwitchConnectionStatusState.NotConnected, "Not Connected"));
 
         App.Settings.GeneralSettings.ChannelID = string.Empty;
+        App.Settings.GeneralSettings.BroadcasterUserId = string.Empty;
         App.Settings.GeneralSettings.OAuthToken = string.Empty;
         _api.Settings.AccessToken = string.Empty;
     }
@@ -101,18 +104,34 @@ public partial class ConnectionSettingsPage : UserControl
         if (!string.IsNullOrEmpty(App.Settings.GeneralSettings.OAuthToken))
         {
             _api.Settings.AccessToken = App.Settings.GeneralSettings.OAuthToken;
-            _ = FetchUserDataAsync();
-            _ = ValidateAuthToken(App.Settings.GeneralSettings.OAuthToken);
+            _ = InitializeTwitchConnectionAsync(App.Settings.GeneralSettings.OAuthToken);
         }
     }
 
     private void OnAccessTokenReceived(object sender, string e)
     {
         App.Settings.GeneralSettings.OAuthToken = e;
+        App.Settings.Persist();
         _api.Settings.AccessToken = e;
 
-        _ = FetchUserDataAsync();
-        _ = ValidateAuthToken(e);
+        _ = InitializeTwitchConnectionAsync(e, refreshEventSub: true);
+    }
+
+    private async Task InitializeTwitchConnectionAsync(string accessToken, bool refreshEventSub = false)
+    {
+        await FetchUserDataAsync();
+        await ValidateAuthToken(accessToken);
+
+        if (!App.Settings.GeneralSettings.UseEventSubChat
+            && !App.Settings.GeneralSettings.RedemptionsEnabled)
+        {
+            return;
+        }
+
+        if (refreshEventSub)
+            _twitchService.RefreshEventSub();
+        else
+            await _twitchService.InitializeAsync();
     }
 
     private async Task FetchUserDataAsync()
@@ -170,7 +189,7 @@ public partial class ConnectionSettingsPage : UserControl
         string status = "Connected";
         var statusState = TwitchConnectionStatusState.Active;
 
-        if (App.Settings.GeneralSettings.RedemptionsEnabled)
+        if (App.Settings.GeneralSettings.RedemptionsEnabled || App.Settings.GeneralSettings.UseEventSubChat)
         {
             statusState = TwitchConnectionStatusState.Active;
             status += " (Active)";

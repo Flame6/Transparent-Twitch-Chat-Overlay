@@ -7,14 +7,13 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Media.Imaging;
-using System.Windows.Threading;
 using TwitchLib.Api;
 using TwitchLib.Api.Auth;
 using TwitchLib.Api.Core.Enums;
 using TwitchLib.Api.Helix.Models.Users.GetUsers;
+using TwitchLib.EventSub.Core.Models.Chat;
 using TwitchLib.EventSub.Core.SubscriptionTypes.Channel;
 using TwitchLib.EventSub.Websockets;
-using TwitchLib.EventSub.Websockets.Client;
 using TwitchLib.EventSub.Websockets.Core.EventArgs;
 using TwitchLib.EventSub.Websockets.Core.EventArgs.Channel;
 using TransparentTwitchChatWPF.Utils;
@@ -24,44 +23,40 @@ namespace TransparentTwitchChatWPF.Twitch;
 
 public class TwitchService : IHostedService, IDisposable
 {
-    // DI
     private readonly ILogger<TwitchService> _logger;
-
     private readonly TwitchAPI _api;
     private readonly EventSubWebsocketClient _eventSubWebsocketClient;
-    private string _userId;
+    private string _oauthUserId = string.Empty;
+    private string _broadcasterUserId = string.Empty;
 
     public event EventHandler<AccessTokenValidatedEventArgs> AccessTokenValidated;
     public event EventHandler<TwitchUserDataEventArgs> UserDataFetched;
-
     public event EventHandler<ChannelPointsCustomRewardRedemptionArgs> ChannelPointsRewardRedeemed;
+    public event EventHandler<TwitchChatMessageEventArgs> ChatMessageReceived;
+    public event EventHandler<TwitchChatMessageDeleteEventArgs> ChatMessageDeleted;
+    public event EventHandler ChatCleared;
+    public event EventHandler<TwitchChatClearUserEventArgs> ChatUserCleared;
 
     public string AuthTokenExpiration { get; private set; } = "...";
     public string TwitchConnectionStatus { get; private set; } = "Not Connected";
     public BitmapImage ProfileImage { get; private set; }
 
     private bool _isEventSubInit = false;
-
     private readonly Random _random = new Random();
 
-    // Reconnection strategy parameters
-    private const int MaxReconnectAttempts = 7;  // Maximum number of times to try reconnecting
-    private const int BaseDelayMilliseconds = 1000; // Initial delay: 1 second
-    private const int MaxDelayMilliseconds = 60000; // Maximum delay: 1 minute
+    private const int MaxReconnectAttempts = 7;
+    private const int BaseDelayMilliseconds = 1000;
+    private const int MaxDelayMilliseconds = 60000;
 
-    private bool _disposedValue; // To detect redundant calls
+    private bool _disposedValue;
 
     public TwitchService(ILogger<TwitchService> logger,
         EventSubWebsocketClient eventSubWebsocketClient)
     {
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-
         _logger.LogInformation("TwitchService as IHostedService constructed!");
-
         _eventSubWebsocketClient = eventSubWebsocketClient ?? throw new ArgumentNullException(nameof(eventSubWebsocketClient));
-
         _api = new TwitchAPI();
-        // Initialize Twitch API settings (Client ID and Access Token)
         _api.Settings.ClientId = "yv4bdnndvd4gwsfw7jnfixp0mnofn7";
     }
 
@@ -83,13 +78,14 @@ public class TwitchService : IHostedService, IDisposable
             return;
         }
 
-        // Get Application Token with Client credentials grant flow.
-        // https://dev.twitch.tv/docs/authentication/getting-tokens-oauth/#client-credentials-grant-flow
         _api.Settings.AccessToken = token;
-        //_logger.LogInformation("_eventSubWebsocketClient AccessToken set to: " + token);
+        _oauthUserId = userId;
 
-        _userId = userId;
-        _logger.LogInformation("_eventSubWebsocketClient _userId set to: " + userId);
+        if (!await EnsureBroadcasterUserIdAsync())
+        {
+            _logger.LogWarning("Could not resolve broadcaster user id for channel.");
+            return;
+        }
 
         await _eventSubWebsocketClient.ConnectAsync();
     }
@@ -136,9 +132,8 @@ public class TwitchService : IHostedService, IDisposable
             var getUser = await _api.Helix.Users.GetUsersAsync();
             GetUsersResponseCallback(getUser);
         }
-        catch (Exception e)
+        catch (Exception)
         {
-            //Growl.Error("Error returned: " + e.Message);
             Growl.Warning("The Twitch connection may be invalid or expired, try reconnecting in settings.");
         }
     }
@@ -155,6 +150,7 @@ public class TwitchService : IHostedService, IDisposable
         ProfileImage = ImageHelpers.LoadFromUrl(profileImageUrl);
 
         App.Settings.GeneralSettings.ChannelID = userID;
+        _oauthUserId = userID;
 
         UserDataFetched?.Invoke(this, new TwitchUserDataEventArgs
         {
@@ -179,9 +175,8 @@ public class TwitchService : IHostedService, IDisposable
                 Growl.Warning("Could not validate the access token. The Twitch connection may need to be reconnected in settings.");
             }
         }
-        catch (Exception e)
+        catch (Exception)
         {
-            //Growl.Error("Error returned: " + e.Message);
             Growl.Warning("Auth token invalid. The Twitch connection may be expired, try reconnecting in settings.");
         }
     }
@@ -203,30 +198,42 @@ public class TwitchService : IHostedService, IDisposable
         });
     }
 
+    public bool ShouldUseEventSubChat()
+    {
+        return App.Settings.GeneralSettings.UseEventSubChat
+            && !string.IsNullOrWhiteSpace(App.Settings.GeneralSettings.OAuthToken)
+            && !string.IsNullOrWhiteSpace(App.Settings.GeneralSettings.ChannelID);
+    }
+
     private void InitEventSub()
     {
-        if (_isEventSubInit) return; // Already initialized
-        if (App.Settings.GeneralSettings.RedemptionsEnabled == false)
+        if (_isEventSubInit) return;
+
+        bool wantsChat = ShouldUseEventSubChat();
+        bool wantsRedemptions = App.Settings.GeneralSettings.RedemptionsEnabled;
+
+        if (!wantsChat && !wantsRedemptions)
         {
-            _logger.LogInformation("EventSub is disabled in settings. Skipping initialization.");
+            _logger.LogInformation("EventSub chat and redemptions are both disabled. Skipping initialization.");
             return;
         }
+
         if (string.IsNullOrEmpty(App.Settings.GeneralSettings.ChannelID))
         {
-            _logger.LogWarning("Channel ID is not set in App.Settings.GeneralSettings. Cannot initialize EventSub.");
-            Growl.Warning("Please setup the Twitch Connection in settings before enabling EventSub.");
+            _logger.LogWarning("OAuth user ID is not set. Cannot initialize EventSub.");
+            Growl.Warning("Please connect your Twitch account in settings before enabling EventSub chat.");
             return;
         }
+
         if (string.IsNullOrEmpty(App.Settings.GeneralSettings.OAuthToken))
         {
-            _logger.LogWarning("OAuth Token is not set in App.Settings.GeneralSettings. Cannot initialize EventSub.");
-            Growl.Warning("Please setup the Twitch Connection in settings before enabling EventSub.");
+            _logger.LogWarning("OAuth Token is not set. Cannot initialize EventSub.");
+            Growl.Warning("Please connect your Twitch account in settings before enabling EventSub chat.");
             return;
         }
 
-        _logger.LogInformation("Initializing Twitch EventSub WebSocket client for channel: " + App.Settings.GeneralSettings.ChannelID);
+        _logger.LogInformation("Initializing Twitch EventSub WebSocket client.");
 
-        // ensure no old subscriptions are hanging around
         UnsubscribeFromEvents();
 
         _eventSubWebsocketClient.WebsocketConnected += OnWebsocketConnected;
@@ -234,42 +241,181 @@ public class TwitchService : IHostedService, IDisposable
         _eventSubWebsocketClient.WebsocketReconnected += OnWebsocketReconnected;
         _eventSubWebsocketClient.ErrorOccurred += OnErrorOccurred;
         _eventSubWebsocketClient.ChannelPointsCustomRewardRedemptionAdd += OnChannelPointsCustomRewardRedemptionAdd;
-        _eventSubWebsocketClient.ChannelChatMessage += _eventSubWebsocketClient_ChannelChatMessage;
+        _eventSubWebsocketClient.ChannelChatMessage += OnChannelChatMessage;
+        _eventSubWebsocketClient.ChannelChatMessageDelete += OnChannelChatMessageDelete;
+        _eventSubWebsocketClient.ChannelChatClear += OnChannelChatClear;
+        _eventSubWebsocketClient.ChannelChatClearUserMessages += OnChannelChatClearUserMessages;
 
         _isEventSubInit = true;
+        _oauthUserId = App.Settings.GeneralSettings.ChannelID;
 
         _logger.LogInformation("Connecting to EventSub...");
         _ = StartAsync(CancellationToken.None);
+    }
+
+    public void RefreshEventSub()
+    {
+        DisableEventSub();
+        InitEventSub();
     }
 
     public void DisableEventSub()
     {
         _logger.LogInformation("User requested disabling Event Sub.");
 
-        // Stop the active service (which disconnects the websocket)
         _ = StopAsync(CancellationToken.None);
 
-        // Reset internal state flags
         _isEventSubInit = false;
-        _userId = null;
+        _oauthUserId = string.Empty;
+        _broadcasterUserId = string.Empty;
 
-        // Unsubscribe from events now that we are disconnected
         UnsubscribeFromEvents();
     }
 
-    private async Task _eventSubWebsocketClient_ChannelChatMessage(object sender, ChannelChatMessageArgs args)
+    private async Task<bool> EnsureBroadcasterUserIdAsync()
     {
-        var userName = args.Notification.Payload.Event.ChatterUserName;
-        var message = args.Notification.Payload.Event.Message.Text;
-        var fragments = args.Notification.Payload.Event.Message.Fragments;
+        if (!string.IsNullOrWhiteSpace(App.Settings.GeneralSettings.BroadcasterUserId))
+        {
+            _broadcasterUserId = App.Settings.GeneralSettings.BroadcasterUserId;
+            return true;
+        }
 
-        //foreach (var fragment in fragments) {
-        //_logger.LogInformation($"Chat Fragment: {fragment.Text} (Type: {fragment.Type}) (Emote: {fragment.Emote.})");
-        //}
+        string channelName = App.Settings.jChatSettings?.Channel;
+        if (string.IsNullOrWhiteSpace(channelName))
+            channelName = App.Settings.GeneralSettings.Username;
 
+        if (string.IsNullOrWhiteSpace(channelName))
+            return false;
+
+        try
+        {
+            var users = await _api.Helix.Users.GetUsersAsync(logins: new List<string> { channelName });
+            if (users?.Users != null && users.Users.Any())
+            {
+                _broadcasterUserId = users.Users[0].Id;
+                App.Settings.GeneralSettings.BroadcasterUserId = _broadcasterUserId;
+                App.Settings.Persist();
+                return true;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to resolve broadcaster user id for channel {Channel}", channelName);
+        }
+
+        return false;
+    }
+
+    private async Task CreateChatSubscriptionAsync(
+        string subscriptionType,
+        Dictionary<string, string> condition,
+        string token)
+    {
+        try
+        {
+            await _api.Helix.EventSub.CreateEventSubSubscriptionAsync(
+                subscriptionType,
+                "1",
+                condition,
+                EventSubTransportMethod.Websocket,
+                _eventSubWebsocketClient.SessionId,
+                accessToken: token);
+
+            _logger.LogInformation("EventSub subscription created: {SubscriptionType}", subscriptionType);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to create EventSub subscription {SubscriptionType}", subscriptionType);
+            Growl.Warning($"EventSub subscription failed ({subscriptionType}). Check mod permissions and reconnect Twitch.");
+        }
+    }
+
+    private Dictionary<string, string> BuildChatCondition()
+    {
+        return new Dictionary<string, string>
+        {
+            { "broadcaster_user_id", _broadcasterUserId },
+            { "user_id", _oauthUserId }
+        };
+    }
+
+    private async Task OnChannelChatMessage(object sender, ChannelChatMessageArgs args)
+    {
         var evt = args.Notification.Payload.Event;
+        var chatArgs = new TwitchChatMessageEventArgs
+        {
+            Nick = evt.ChatterUserName,
+            Message = evt.Message.Text,
+            MessageId = evt.MessageId,
+            UserId = evt.ChatterUserId,
+            Color = evt.Color ?? string.Empty,
+            Badges = BuildBadgeString(evt.Badges),
+            Emotes = BuildEmoteString(evt.Message),
+            RoomId = evt.BroadcasterUserId,
+            SourceRoomId = evt.SourceBroadcasterUserId
+        };
 
-        //_logger.LogInformation($"Chat message from {userName}: {message}");
+        ChatMessageReceived?.Invoke(this, chatArgs);
+        await Task.CompletedTask;
+    }
+
+    private async Task OnChannelChatMessageDelete(object sender, ChannelChatMessageDeleteArgs args)
+    {
+        var messageId = args.Notification.Payload.Event.MessageId;
+        ChatMessageDeleted?.Invoke(this, new TwitchChatMessageDeleteEventArgs { MessageId = messageId });
+        await Task.CompletedTask;
+    }
+
+    private async Task OnChannelChatClear(object sender, ChannelChatClearArgs args)
+    {
+        ChatCleared?.Invoke(this, EventArgs.Empty);
+        await Task.CompletedTask;
+    }
+
+    private async Task OnChannelChatClearUserMessages(object sender, ChannelChatClearUserMessagesArgs args)
+    {
+        var evt = args.Notification.Payload.Event;
+        ChatUserCleared?.Invoke(this, new TwitchChatClearUserEventArgs
+        {
+            Username = evt.TargetUserName
+        });
+        await Task.CompletedTask;
+    }
+
+    private static string BuildBadgeString(IEnumerable<ChatBadge> badges)
+    {
+        if (badges == null)
+            return string.Empty;
+
+        return string.Join(",", badges.Select(b => $"{b.SetId}/{b.Id}"));
+    }
+
+    private static string BuildEmoteString(ChatMessage message)
+    {
+        if (message?.Fragments == null || message.Fragments.Length == 0)
+            return string.Empty;
+
+        var emoteMap = new Dictionary<string, List<string>>();
+
+        int offset = 0;
+        foreach (var fragment in message.Fragments)
+        {
+            int length = fragment.Text?.Length ?? 0;
+            if (fragment.Type == "emote" && fragment.Emote != null && length > 0)
+            {
+                string emoteId = fragment.Emote.Id;
+                string range = $"{offset}-{(offset + length - 1)}";
+                if (!emoteMap.ContainsKey(emoteId))
+                    emoteMap[emoteId] = new List<string>();
+                emoteMap[emoteId].Add(range);
+            }
+            offset += length;
+        }
+
+        if (emoteMap.Count == 0)
+            return string.Empty;
+
+        return string.Join("/", emoteMap.Select(kvp => $"{kvp.Key}:{string.Join(",", kvp.Value)}"));
     }
 
     private async Task OnChannelPointsCustomRewardRedemptionAdd(object sender, ChannelPointsCustomRewardRedemptionArgs e)
@@ -282,8 +428,6 @@ public class TwitchService : IHostedService, IDisposable
         ChannelPointsRewardRedeemed?.Invoke(this, e);
     }
 
-
-    // --- WebSocket Events -------------------------------------------------------------
     private async Task OnWebsocketConnected(object sender, WebsocketConnectedArgs e)
     {
         _logger.LogInformation($"Websocket {_eventSubWebsocketClient.SessionId} connected!");
@@ -291,37 +435,41 @@ public class TwitchService : IHostedService, IDisposable
 
         if (!e.IsRequestedReconnect)
         {
-            // subscribe to topics
-            // create condition Dictionary
-            // need BOTH broadcaster and moderator values or EventSub returns an Error!
-            var condition = new Dictionary<string, string> { { "broadcaster_user_id", _userId }, { "moderator_user_id", _userId } };
-            // Create and send EventSubscription
-            await _api.Helix.EventSub.CreateEventSubSubscriptionAsync(
-                    "channel.channel_points_custom_reward_redemption.add", 
-                    "1", 
-                    condition, 
-                    EventSubTransportMethod.Websocket,
-                    _eventSubWebsocketClient.SessionId, 
-                    accessToken: App.Settings.GeneralSettings.OAuthToken
-                );
+            await EnsureBroadcasterUserIdAsync();
 
-            var conditionChatMessage = new Dictionary<string, string> {
-                { "broadcaster_user_id", _userId },
-                { "user_id", _userId }
-            };
-            await _api.Helix.EventSub.CreateEventSubSubscriptionAsync(
-                    "channel.chat.message", 
-                    "1", 
-                    conditionChatMessage, 
-                    EventSubTransportMethod.Websocket,
-                    _eventSubWebsocketClient.SessionId, 
-                    accessToken: App.Settings.GeneralSettings.OAuthToken
-                );
+            if (string.IsNullOrWhiteSpace(_broadcasterUserId))
+            {
+                Growl.Warning("Could not resolve the channel to watch. Set the channel name in Chat settings.");
+                return;
+            }
 
-            //await _twitchApi.Helix.EventSub.CreateEventSubSubscriptionAsync("channel.channel_points_automatic_reward_redemption.add", "2", condition, EventSubTransportMethod.Websocket,
-            //_eventSubWebsocketClient.SessionId, accessToken: App.SettingsObject.GeneralSettings.OAuthToken);
-            // for special Events you need to additionally add the AccessToken of the ChannelOwner to the request.
-            // https://dev.twitch.tv/docs/eventsub/eventsub-subscription-types/
+            var chatCondition = BuildChatCondition();
+            string token = App.Settings.GeneralSettings.OAuthToken;
+
+            if (App.Settings.GeneralSettings.UseEventSubChat && ShouldUseEventSubChat())
+            {
+                await CreateChatSubscriptionAsync("channel.chat.message", chatCondition, token);
+                await CreateChatSubscriptionAsync("channel.chat.message_delete", chatCondition, token);
+                await CreateChatSubscriptionAsync("channel.chat.clear", chatCondition, token);
+                await CreateChatSubscriptionAsync("channel.chat.clear_user_messages", chatCondition, token);
+            }
+
+            if (App.Settings.GeneralSettings.RedemptionsEnabled)
+            {
+                var redemptionCondition = new Dictionary<string, string>
+                {
+                    { "broadcaster_user_id", _broadcasterUserId },
+                    { "moderator_user_id", _oauthUserId }
+                };
+
+                await _api.Helix.EventSub.CreateEventSubSubscriptionAsync(
+                    "channel.channel_points_custom_reward_redemption.add",
+                    "1",
+                    redemptionCondition,
+                    EventSubTransportMethod.Websocket,
+                    _eventSubWebsocketClient.SessionId,
+                    accessToken: token);
+            }
         }
     }
 
@@ -331,14 +479,8 @@ public class TwitchService : IHostedService, IDisposable
 
         for (int attempt = 0; attempt < MaxReconnectAttempts; attempt++)
         {
-            // Calculate exponential backoff delay
-            // Formula: BaseDelay * (2^attempt)
             double exponentialDelay = BaseDelayMilliseconds * Math.Pow(2, attempt);
-
-            // Add jitter: a random small duration (e.g., 0 to 1 second) to prevent thundering herd
             int jitter = _random.Next(0, 1000);
-
-            // Calculate total delay, ensuring it doesn't exceed MaxDelayMilliseconds
             int delayMilliseconds = (int)Math.Min(exponentialDelay + jitter, MaxDelayMilliseconds);
 
             _logger.LogInformation($"[Twitch EventSub] Reconnect attempt {attempt + 1}/{MaxReconnectAttempts}. Waiting {delayMilliseconds}ms before next attempt...");
@@ -350,7 +492,7 @@ public class TwitchService : IHostedService, IDisposable
                 if (await _eventSubWebsocketClient.ReconnectAsync())
                 {
                     _logger.LogInformation($"[Twitch EventSub] Websocket {_eventSubWebsocketClient.SessionId} reconnected successfully on attempt {attempt + 1}!");
-                    return; // Successfully reconnected, exit the method.
+                    return;
                 }
                 else
                 {
@@ -359,16 +501,11 @@ public class TwitchService : IHostedService, IDisposable
             }
             catch (Exception ex)
             {
-                // Log the exception details. Consider specific exception types for different handling.
                 _logger.LogInformation($"[Twitch EventSub] Websocket {_eventSubWebsocketClient.SessionId} reconnect attempt {attempt + 1} threw an exception: {ex.Message}");
-                // Depending on the exception, might want to break the loop earlier
-                // (e.g., for authentication failures or other non-recoverable errors).
             }
         }
 
-        _logger.LogWarning($"[Twitch EventSub] Websocket {_eventSubWebsocketClient.SessionId} failed to reconnect after {MaxReconnectAttempts} attempts. Stopping retry efforts for this disconnection event.");
-        // TODO: At this point, notify the user, log a more critical error, or transition to an offline state.
-
+        _logger.LogWarning($"[Twitch EventSub] Websocket {_eventSubWebsocketClient.SessionId} failed to reconnect after {MaxReconnectAttempts} attempts.");
         Growl.Error("Twitch EventSub connection lost. Please check your internet connection or Twitch Connection settings.");
     }
 
@@ -380,37 +517,29 @@ public class TwitchService : IHostedService, IDisposable
 
     private async Task OnErrorOccurred(object sender, ErrorOccuredArgs e)
     {
-        //LogService.Instance.ChannelChatStatus.IsConnected = true;
-
         _logger.LogInformation($"Websocket {_eventSubWebsocketClient.SessionId} - Error occurred!\n{e.Message}\n{e.Exception}");
         Growl.Error($"Twitch EventSub Error: {e.Message}");
     }
-
-    // --- Cleanup Methods -------------------------------------------------------------
 
     public async Task DisconnectTwitchConnectionAsync()
     {
         _logger.LogInformation("User requested Twitch disconnection.");
 
-        // Stop the active service (which disconnects the websocket)
         await StopAsync(CancellationToken.None);
 
-        // Clear sensitive data and settings
         App.Settings.GeneralSettings.ChannelID = string.Empty;
+        App.Settings.GeneralSettings.BroadcasterUserId = string.Empty;
         App.Settings.GeneralSettings.OAuthToken = string.Empty;
         App.Settings.Persist();
 
-        // Update the UI state
         TwitchConnectionStatus = "Not Connected";
         AuthTokenExpiration = "...";
-        ProfileImage = null; // Or a default image
+        ProfileImage = null;
 
-        // Reset internal state flags
         _isEventSubInit = false;
-        _userId = null;
+        _oauthUserId = string.Empty;
+        _broadcasterUserId = string.Empty;
 
-        //    Unsubscribe from events now that we are disconnected
-        //    This prevents handlers from running in a disconnected state.
         UnsubscribeFromEvents();
     }
 
@@ -425,7 +554,10 @@ public class TwitchService : IHostedService, IDisposable
             _eventSubWebsocketClient.WebsocketReconnected -= OnWebsocketReconnected;
             _eventSubWebsocketClient.ErrorOccurred -= OnErrorOccurred;
             _eventSubWebsocketClient.ChannelPointsCustomRewardRedemptionAdd -= OnChannelPointsCustomRewardRedemptionAdd;
-            _eventSubWebsocketClient.ChannelChatMessage -= _eventSubWebsocketClient_ChannelChatMessage;
+            _eventSubWebsocketClient.ChannelChatMessage -= OnChannelChatMessage;
+            _eventSubWebsocketClient.ChannelChatMessageDelete -= OnChannelChatMessageDelete;
+            _eventSubWebsocketClient.ChannelChatClear -= OnChannelChatClear;
+            _eventSubWebsocketClient.ChannelChatClearUserMessages -= OnChannelChatClearUserMessages;
         }
     }
 
@@ -435,29 +567,15 @@ public class TwitchService : IHostedService, IDisposable
         {
             if (disposing)
             {
-                // TODO: dispose managed state (managed objects).
                 _logger.LogInformation("Disposing TwitchService managed resources.");
-
-                // Unsubscribe from all events to prevent memory leaks
                 UnsubscribeFromEvents();
             }
-
-            // TODO: free unmanaged resources (unmanaged objects) and override finalizer
-            // TODO: set large fields to null
             _disposedValue = true;
         }
     }
 
-    // finalizer only called by the GC if Dispose() is not called
-    // It's a safety net if there's unmanaged resources
-    // ~TwitchService()
-    // {
-    //     Dispose(disposing: false);
-    // }
-
     public void Dispose()
     {
-        // Don't change this code. Put cleanup code in 'Dispose(bool disposing)' method
         Dispose(disposing: true);
         GC.SuppressFinalize(this);
     }

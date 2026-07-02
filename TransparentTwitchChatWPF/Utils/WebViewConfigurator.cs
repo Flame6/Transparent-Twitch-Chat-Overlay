@@ -59,8 +59,9 @@ public class WebViewConfigurator
 
             //chatProvider.PushNewMessage(chatType.ToString() + " Loaded.");
 
-            // Initialize other services
-            if (App.Settings.GeneralSettings.RedemptionsEnabled)
+            // Initialize Twitch EventSub when chat or redemptions need it
+            if (App.Settings.GeneralSettings.UseEventSubChat
+                || App.Settings.GeneralSettings.RedemptionsEnabled)
             {
                 _ = _twitchService.InitializeAsync();
             }

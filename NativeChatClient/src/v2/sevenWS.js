@@ -17,6 +17,7 @@ async function getOriginsForSetID(setID) {
 
 function subscribeToOrigins(origins, conn) {
     console.log("Subscribing to new origins")
+    if (Chat.info.seventvChannelOnly) return;
     // subscribe to emote events for the origins
     if (origins.length > 0) {
         for (var i = 0; i < origins.length; i++) {
@@ -53,7 +54,8 @@ function unsubscribeFromOrigins(origins, conn) {
 
 function seven_ws(channel) {
     (async () => {
-        var info = await getUserInfo(Chat.info.channelID);
+        var channelLogin = Chat.getChannelLogin();
+        var info = await getUserInfo(channelLogin);
         var origins = await getOriginsForSetID(info.emoteSetID)
         var id = info.id;
         var emoteSetID = info.emoteSetID;
@@ -96,7 +98,7 @@ function seven_ws(channel) {
 
             console.log("Subscribing to origins")
             // subscribe to emote events for the origins
-            if (origins.length > 0) {
+            if (!Chat.info.seventvChannelOnly && origins.length > 0) {
                 for (var i = 0; i < origins.length; i++) {
                     conn.send(JSON.stringify({
                         op: 35, // subscribe opcode
@@ -146,11 +148,11 @@ function seven_ws(channel) {
                                 var link = `https:${emoteEvent.d.body.pushed[0].value.data.host.url}/${emoteData.name}`;
                                 // if link ends in .gif replace with .webp
                                 if (link.endsWith(".gif")) link = link.replace(".gif", ".webp")
-                                Chat.info.emotes[emoteEvent.d.body.pushed[0].value.name] = {
+                                Chat.registerSevenTvEmote(emoteEvent.d.body.pushed[0].value.name, {
                                     id: emoteEvent.d.body.pushed[0].value.id,
                                     image: link,
                                     zeroWidth: emoteEvent.d.body.pushed[0].value.data.flags == 256,
-                                };
+                                }, true);
                             } else if (emoteEvent.d.body.pulled && emoteEvent.d.body.pulled.length > 0) {
                                 console.log(`[${channel}] Removed: ${emoteEvent.d.body.pulled[0].old_value.name}`);
                                 SendInfoText(`Removed: ${emoteEvent.d.body.pulled[0].old_value.name}`);
@@ -176,6 +178,7 @@ function seven_ws(channel) {
                                         }
                                         
                                         if (emoteEvent.d.body.updated[i].value.length > 0) { // added emote origin
+                                            if (Chat.info.seventvChannelOnly) continue;
                                             for (var j = 0; j < emoteEvent.d.body.updated[i].value.length; j++) { // loop through all added origins
                                                 origin = emoteEvent.d.body.updated[i].value[j].id;
                                                 // Subscribe to emote set events for the new origin
@@ -191,7 +194,7 @@ function seven_ws(channel) {
                                             }
                                         }
                                     }
-                                    Chat.loadEmotes(Chat.info.channelID);
+                                    Chat.loadEmotes(Chat.info.channelID, Chat.info.channel);
                                     SendInfoText("Emote origin changed")
                                     console.log("Cyan Chat: Emote origin changed, refreshing emotes...");
                                     return
@@ -204,17 +207,17 @@ function seven_ws(channel) {
                                 var link = `https:${emoteEvent.d.body.updated[0].value.data.host.url}/${emoteData.name}`;
                                 // if link ends in .gif replace with .webp
                                 if (link.endsWith(".gif")) link = link.replace(".gif", ".webp")
-                                Chat.info.emotes[emoteEvent.d.body.updated[0].value.name] = {
+                                Chat.registerSevenTvEmote(emoteEvent.d.body.updated[0].value.name, {
                                     id: emoteEvent.d.body.updated[0].value.id,
-                                    image: `https:${emoteEvent.d.body.updated[0].value.data.host.url}/${emoteData.name}`,
+                                    image: link,
                                     zeroWidth: emoteEvent.d.body.updated[0].value.data.flags == 256,
-                                };
+                                }, true);
                             } else {
                                 console.log(`Unknown event: ${event.data}`);
                             }
                         }
                     } else if (msg.d.type === "user.update") {
-                        Chat.loadEmotes(Chat.info.channelID);
+                        Chat.loadEmotes(Chat.info.channelID, Chat.info.channel);
                         var oldEmoteSetName = msg.d.body.updated[0].value[0].old_value.name
                         var newEmoteSetName = msg.d.body.updated[0].value[0].value.name
                         var newEmoteSetID = msg.d.body.updated[0].value[0].value.id
@@ -258,6 +261,9 @@ function seven_ws(channel) {
                         currentEmoteSetID = newEmoteSetID;
                         getOriginsForSetID(newEmoteSetID).then(newOrigins => {
                             console.log(newOrigins);
+                            if (Chat.info.seventvChannelOnly) {
+                                return;
+                            }
                             console.log("Subscribing to new origins");
                             // subscribe to emote events for the origins
                             if (newOrigins.length > 0) {

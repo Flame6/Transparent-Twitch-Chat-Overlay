@@ -52,6 +52,13 @@ function populateFormFromSettings(settings) {
     $fade_bool.prop('checked', settings.fade > 0);
     if (settings.fade > 0) {
         $fade.val(settings.fade);
+        // Ensure the seconds input is visible when fade is already enabled.
+        // Setting .prop('checked') does not fire the change handler, so reveal manually.
+        $fade.removeClass("hidden").css({ 'opacity': 1, 'transform': 'translateY(0)' });
+        $fade_seconds.removeClass("hidden").css({ 'opacity': 1 });
+    } else {
+        $fade.addClass("hidden");
+        $fade_seconds.addClass("hidden");
     }
     $readable.prop('checked', settings.readable);
     $badges.prop('checked', settings.hideBadges);

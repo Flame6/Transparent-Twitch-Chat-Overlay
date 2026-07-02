@@ -3,6 +3,7 @@ using System.Windows.Input;
 using System.Windows.Interop;
 using TransparentTwitchChatWPF.Helpers;
 using Velopack;
+using Velopack.Exceptions;
 using Velopack.Sources;
 using Application = System.Windows.Application;
 using Brushes = System.Windows.Media.Brushes;
@@ -185,6 +186,10 @@ public partial class MainWindow : Window, BrowserWindow
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _twitchService = twitchService ?? throw new ArgumentNullException(nameof(twitchService));
         _twitchService.ChannelPointsRewardRedeemed += OnChannelPointsRewardRedeemed;
+        _twitchService.ChatMessageReceived += OnChatMessageReceived;
+        _twitchService.ChatMessageDeleted += OnChatMessageDeleted;
+        _twitchService.ChatCleared += OnChatCleared;
+        _twitchService.ChatUserCleared += OnChatUserCleared;
         _webViewConfigurator = webViewConfigurator ?? throw new ArgumentNullException(nameof(webViewConfigurator));
         _nativeChatFileManager = nativeChatFileManager ?? throw new ArgumentNullException(nameof(nativeChatFileManager));
 
@@ -201,14 +206,108 @@ public partial class MainWindow : Window, BrowserWindow
 
         _timerTick = 0;
         _timerCheckForegroundFocus = new DispatcherTimer();
-        _timerCheckForegroundFocus.Interval = TimeSpan.FromSeconds(1);
+        UpdateTopmostRefreshTimerInterval();
         _timerCheckForegroundFocus.Tick += _timer_Tick;
-        _timerCheckForegroundFocus.Start();
+        if (App.Settings.GeneralSettings.EnablePeriodicTopmostRefresh)
+            _timerCheckForegroundFocus.Start();
 
         SetupOrReplaceHotkeys();
         //SettingsWindow.SettingsWindowActive += OnSettingsWindowActive;
 
         InitializeWebViewAsync();
+    }
+
+    private void OnChatMessageReceived(object sender, TwitchChatMessageEventArgs e)
+    {
+        PostNativeChatEvent("chatMessage", new
+        {
+            nick = e.Nick,
+            message = e.Message,
+            tags = new
+            {
+                id = e.MessageId,
+                badges = e.Badges,
+                color = e.Color,
+                emotes = e.Emotes,
+                mod = e.Badges.Contains("moderator/", StringComparison.OrdinalIgnoreCase) ? "1" : "0",
+                subscriber = e.Badges.Contains("subscriber/", StringComparison.OrdinalIgnoreCase) || e.Badges.Contains("founder/", StringComparison.OrdinalIgnoreCase) ? "1" : "0",
+                vip = e.Badges.Contains("vip/", StringComparison.OrdinalIgnoreCase) ? "1" : "0",
+                displayName = e.Nick,
+                userId = e.UserId,
+                roomId = e.RoomId,
+                sourceRoomId = e.SourceRoomId ?? string.Empty
+            }
+        });
+    }
+
+    private void OnChatMessageDeleted(object sender, TwitchChatMessageDeleteEventArgs e)
+    {
+        PostNativeChatEvent("chatMessageDelete", new { messageId = e.MessageId });
+    }
+
+    private void OnChatCleared(object sender, EventArgs e)
+    {
+        PostNativeChatEvent("chatClear", new { });
+    }
+
+    private void OnChatUserCleared(object sender, TwitchChatClearUserEventArgs e)
+    {
+        PostNativeChatEvent("chatClearUser", new { username = e.Username, banDuration = e.BanDuration });
+    }
+
+    private void PushNativeChatConfig()
+    {
+        if (App.Settings.GeneralSettings.ChatType != (int)ChatTypes.NativeChat)
+            return;
+
+        if (webView?.CoreWebView2 == null)
+            return;
+
+        webView.Dispatcher.Invoke(() =>
+        {
+            new NativeChatProvider().PushConfig(webView.CoreWebView2);
+        });
+    }
+
+    private void PostNativeChatEvent(string type, object payload)
+    {
+        if (App.Settings.GeneralSettings.ChatType != (int)ChatTypes.NativeChat)
+            return;
+
+        if (webView?.CoreWebView2 == null)
+            return;
+
+        var message = new { type, payload };
+        string json = JsonSerializer.Serialize(message, new JsonSerializerOptions
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+        });
+
+        webView.Dispatcher.Invoke(() =>
+        {
+            webView.CoreWebView2?.PostWebMessageAsJson(json);
+        });
+    }
+
+    private void UpdateTopmostRefreshTimerInterval()
+    {
+        int seconds = App.Settings.GeneralSettings.TopmostRefreshIntervalSeconds;
+        if (seconds < 5) seconds = 5;
+        _timerCheckForegroundFocus.Interval = TimeSpan.FromSeconds(seconds);
+    }
+
+    public void ApplyTopmostRefreshSettings()
+    {
+        UpdateTopmostRefreshTimerInterval();
+        if (App.Settings.GeneralSettings.EnablePeriodicTopmostRefresh)
+        {
+            _timerTick = 0;
+            _timerCheckForegroundFocus.Start();
+        }
+        else
+        {
+            _timerCheckForegroundFocus.Stop();
+        }
     }
 
     private void OnChannelPointsRewardRedeemed(object sender, TwitchLib.EventSub.Websockets.Core.EventArgs.Channel.ChannelPointsCustomRewardRedemptionArgs e)
@@ -537,10 +636,14 @@ public partial class MainWindow : Window, BrowserWindow
     {
         CheckForegroundWindow();
 
+        if (!App.Settings.GeneralSettings.EnablePeriodicTopmostRefresh)
+            return;
+
         _timerTick += 1;
         if (_timerTick >= 3)
         {
-            _timerCheckForegroundFocus.Stop();
+            // Keep running for periodic refresh; reset burst counter only
+            _timerTick = 0;
         }
     }
 
@@ -1164,6 +1267,7 @@ public partial class MainWindow : Window, BrowserWindow
         };
 
         settingsWindow.RestoreNativeChatDefaultsRequested += RestoreNativeChatFiles;
+        settingsWindow.NativeChatConfigRefreshRequested += PushNativeChatConfig;
 
         // Settings were saved
         if (settingsWindow.ShowDialog() == true)
@@ -1174,24 +1278,9 @@ public partial class MainWindow : Window, BrowserWindow
 
                 SetupChatProvider();
 
-                /*
-                if (!App.Settings.GeneralSettings.RedemptionsEnabled)
-                                _twitchService.DisableEventSub(); 
-                if (App.Settings.GeneralSettings.ChatNotificationSound.ToLower() == "none")
-                    this.jsCallbackFunctions.MediaFile = string.Empty;
-                else
-                {
-                    string file = Path.Combine(GetSoundClipsFolder(), App.Settings.GeneralSettings.ChatNotificationSound);
-                    if (File.Exists(file))
-                    {
-                        this.jsCallbackFunctions.OnAudioDeviceChanged();
-                        this.jsCallbackFunctions.MediaFile = file;
-                    }
-                    else
-                    {
-                        this.jsCallbackFunctions.MediaFile = string.Empty;
-                    }
-                }*/
+                App.Settings.GeneralSettings.BroadcasterUserId = string.Empty;
+                _twitchService.RefreshEventSub();
+                ApplyTopmostRefreshSettings();
             }
 
             this.taskbarControl.Visibility = Visibility.Visible;
@@ -1317,6 +1406,12 @@ public partial class MainWindow : Window, BrowserWindow
 
         try
         {
+            if (!mgr.IsInstalled)
+            {
+                _logger.LogInformation("Portable build detected; skipping Velopack update check.");
+                return;
+            }
+
             var newVersion = await mgr.CheckForUpdatesAsync();
 
             App.Settings.GeneralSettings.LastUpdateCheck = DateTime.Now;
@@ -1357,24 +1452,19 @@ public partial class MainWindow : Window, BrowserWindow
                 }
             }
         }
+        catch (NotInstalledException)
+        {
+            _logger.LogInformation("Application is not installed via Velopack; skipping update check.");
+        }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error checking for updates (Outer Exception)");
+            _logger.LogError(ex, "Error checking for updates");
 
-            if (ex.InnerException != null)
-            {
-                _logger.LogError(ex.InnerException, "INNER EXCEPTION DETAILS");
-            }
-
-            // For debugging, show the full details in the message box
-            string fullErrorDetails = ex.ToString();
-            if (ex.InnerException != null)
-            {
-                fullErrorDetails += "\n\nINNER EXCEPTION:\n" + ex.InnerException.ToString();
-            }
-
-            MessageBox.Show("Error checking for updates:\n" + fullErrorDetails, 
-                "Error while Checking for Update", MessageBoxButton.OK, MessageBoxImage.Error);
+            MessageBox.Show(
+                "Could not check for updates. If you are running a portable build, this is expected.\n\n" + ex.Message,
+                "Update Check",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
         }
 #endif
     }
@@ -1417,6 +1507,7 @@ public partial class MainWindow : Window, BrowserWindow
 
     private void SetupChatProvider()
     {
+        App.Settings.GeneralSettings.ChatType = (int)ChatTypes.NativeChat;
         string localIndex = LocalHtmlHelper.GetIndexHtmlPath();
         bool success = false;
         try

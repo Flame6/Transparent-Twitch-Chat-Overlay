@@ -43,15 +43,21 @@ const nativeChatHost = window.chrome && window.chrome.webview ? window.chrome.we
 
 if (nativeChatHost) {
 nativeChatHost.addEventListener('message', event => {
-  // The event.data contains the JSON string sent from C#
-  const message = event.data; // event.data is already a JS object
-  
-  // Check the type of the message and handle it
+  const message = event.data;
+
   switch (message.type) {
       case 'config':
           config = message.payload;
           hasReceivedConfig = true;
           console.log("Configuration received:", config);
+
+          if (hasStartedNativeChat) {
+            Chat.applySettings(config);
+            if (config.channel && config.channel !== Chat.info.channel) {
+              console.log(`Channel changed to: ${config.channel}`);
+              Chat.start(config.channel);
+            }
+          }
           break;
 
       case 'credentials':
@@ -59,20 +65,40 @@ nativeChatHost.addEventListener('message', event => {
           hasReceivedCredentials = true;
           console.log("Credentials received.");
           break;
+
+      case 'chatMessage':
+          if (message.payload) {
+            Chat.handleEventSubMessage(message.payload);
+          }
+          return;
+
+      case 'chatMessageDelete':
+          if (message.payload && message.payload.messageId) {
+            Chat.clearMessage(message.payload.messageId);
+          }
+          return;
+
+      case 'chatClear':
+          Chat.clearWholeChat();
+          return;
+
+      case 'chatClearUser':
+          if (message.payload && message.payload.username) {
+            Chat.clearChat(message.payload.username);
+          }
+          return;
           
       default:
           console.warn("Received unknown message type:", message.type);
           return;
   }
 
-  // Only connect after both objects have been received
   if (hasReceivedConfig && hasReceivedCredentials && !hasStartedNativeChat) {
       hasStartedNativeChat = true;
       console.log(`All data received. Connecting to channel: ${config.channel}`);
-      
-      // Apply the settings and connect
+
       Chat.applySettings(config);
-      Chat.connect(config.channel);
+      Chat.start(config.channel);
   }
 });
 } else {
@@ -138,6 +164,14 @@ Chat = {
     playSound: false,
     filterAllowAllVIPs: false,
     filterAllowAllMods: false,
+    useEventSubChat: false,
+    receivedEventSubMessage: false,
+    eventSubFallbackTimer: null,
+    seventvChannelOnly: true,
+    seventvChannelEmotes: {},
+    channelThirdPartyEmotes: {},
+    highlightFavoriteWords: false,
+    favoriteWords: [],
     vips: [],
     blockList: [],
     customCSS: "",
@@ -176,6 +210,26 @@ Chat = {
     // Process lists if they come in as comma-separated strings
     if (cfg.vips && typeof cfg.vips === 'string') this.info.vips = cfg.vips.split(',').map(v => v.trim().toLowerCase());
     if (cfg.blockList && typeof cfg.blockList === 'string') this.info.blockList = cfg.blockList.split(',').map(v => v.trim().toLowerCase());
+    if (cfg.favoriteWords && typeof cfg.favoriteWords === 'string') this.info.favoriteWords = cfg.favoriteWords.split(',').map(v => v.trim().toLowerCase()).filter(Boolean);
+    if (Array.isArray(cfg.favoriteWords)) this.info.favoriteWords = cfg.favoriteWords.map(v => String(v).trim().toLowerCase()).filter(Boolean);
+
+    if (typeof cfg.seventvChannelOnly === "boolean") {
+      this.info.seventvChannelOnly = cfg.seventvChannelOnly;
+    }
+
+    if (typeof cfg.highlightFavoriteWords === "boolean") {
+      this.info.highlightFavoriteWords = cfg.highlightFavoriteWords;
+    }
+
+    if (this.info.seventvChannelOnly) {
+      this.info.seventvPersonalEmotes = {};
+    }
+
+    this.purgeDisallowedThirdPartyEmotes();
+
+    if (this.info.channelID || this.info.channel) {
+      this.loadEmotes(this.info.channelID, this.info.channel);
+    }
     
     // Apply the dynamic custom CSS generated from C#
     if (this.info.customCSS) {
@@ -208,10 +262,115 @@ Chat = {
     }
   },
 
-  loadEmotes: function (channelID) {
+  getChannelLogin: function () {
+    return String(Chat.info.channel || config.channel || "").trim().toLowerCase();
+  },
+
+  isSevenTvEmoteImage: function (image) {
+    return typeof image === "string" && image.includes("cdn.7tv.app/emote");
+  },
+
+  shouldAllowThirdPartyEmote: function (name, image) {
+    if (!Chat.info.seventvChannelOnly) return true;
+
+    if (Chat.isSevenTvEmoteImage(image)) {
+      return Object.prototype.hasOwnProperty.call(Chat.info.seventvChannelEmotes, name);
+    }
+
+    return Object.prototype.hasOwnProperty.call(Chat.info.channelThirdPartyEmotes, name);
+  },
+
+  registerChannelThirdPartyEmote: function (name, emoteObj) {
+    Chat.info.channelThirdPartyEmotes[name] = emoteObj;
+    Chat.info.emotes[name] = emoteObj;
+  },
+
+  stripImageQuery: function (src) {
+    return String(src || "").split("?")[0];
+  },
+
+  getAllowedEmoteImageSet: function () {
+    const allowed = new Set();
+    Object.values(Chat.info.seventvChannelEmotes || {}).forEach((e) => {
+      if (e && e.image) allowed.add(Chat.stripImageQuery(e.image));
+    });
+    Object.values(Chat.info.channelThirdPartyEmotes || {}).forEach((e) => {
+      if (e && e.image) allowed.add(Chat.stripImageQuery(e.image));
+    });
+    return allowed;
+  },
+
+  // Safety net: after message HTML is built, remove any emote image that is not
+  // part of the watched channel's allowed emote set when channel-only mode is on.
+  sanitizeChannelOnlyEmotes: function ($message) {
+    if (!Chat.info.seventvChannelOnly || !$message) return;
+
+    const allowed = Chat.getAllowedEmoteImageSet();
+    $message.find("img.emote, img.emoji").each(function () {
+      const src = Chat.stripImageQuery($(this).attr("src"));
+      if (!allowed.has(src)) {
+        const alt = $(this).attr("alt");
+        if (alt) {
+          $(this).replaceWith(document.createTextNode(alt));
+        } else {
+          $(this).remove();
+        }
+      }
+    });
+  },
+
+  purgeDisallowedThirdPartyEmotes: function () {
+    if (!Chat.info.seventvChannelOnly) return;
+
+    Object.keys(Chat.info.emotes).forEach((name) => {
+      const emote = Chat.info.emotes[name];
+      if (!emote?.image) return;
+
+      const isSevenTv = Chat.isSevenTvEmoteImage(emote.image);
+      const isThirdParty =
+        isSevenTv ||
+        emote.image.includes("cdn.betterttv.net") ||
+        emote.image.includes("cdn.frankerfacez.com") ||
+        emote.image.includes("ffz.io");
+
+      if (!isThirdParty) return;
+
+      const allowed =
+        Object.prototype.hasOwnProperty.call(Chat.info.seventvChannelEmotes, name) ||
+        Object.prototype.hasOwnProperty.call(Chat.info.channelThirdPartyEmotes, name);
+
+      if (!allowed) {
+        delete Chat.info.emotes[name];
+      }
+    });
+  },
+
+  registerSevenTvEmote: function (name, emoteObj, isChannelEmote) {
+    if (isChannelEmote) {
+      Chat.info.seventvChannelEmotes[name] = emoteObj;
+    }
+
+    if (!Chat.info.seventvChannelOnly || isChannelEmote) {
+      Chat.info.emotes[name] = emoteObj;
+    }
+  },
+
+  loadEmotes: function (channelID, channelLogin) {
     Chat.info.emotes = {};
-    // Load BTTV, FFZ and 7TV emotes
-    ["emotes/global", "users/twitch/" + encodeURIComponent(channelID)].forEach(
+    Chat.info.seventvChannelEmotes = {};
+    Chat.info.channelThirdPartyEmotes = {};
+    const watchLogin = String(channelLogin || Chat.getChannelLogin() || "").trim().toLowerCase();
+    const channelOnly = Chat.info.seventvChannelOnly;
+    // In channel-only mode we ONLY load the 7TV channel emote set for the watched
+    // channel. No BTTV, no FFZ, no global 7TV, no personal 7TV.
+    const ffzEndpoints = channelOnly
+      ? []
+      : ["emotes/global", "users/twitch/" + encodeURIComponent(channelID)];
+    const bttvEndpoints = channelOnly
+      ? []
+      : ["emotes/global", "users/twitch/" + encodeURIComponent(channelID)];
+
+    ffzEndpoints.forEach(
       (endpoint) => {
         $.getJSON(
           addRandomQueryString(
@@ -226,17 +385,23 @@ Chat = {
               var imageUrl = emote.images["2x"] || emote.images["1x"];
               var upscale = true;
             }
-            Chat.info.emotes[emote.code] = {
+            const emoteObj = {
               id: emote.id,
               image: imageUrl,
               upscale: upscale,
             };
+            if (channelOnly) {
+              Chat.registerChannelThirdPartyEmote(emote.code, emoteObj);
+            } else {
+              Chat.info.emotes[emote.code] = emoteObj;
+            }
           });
+          Chat.purgeDisallowedThirdPartyEmotes();
         });
       }
     );
 
-    ["emotes/global", "users/twitch/" + encodeURIComponent(channelID)].forEach(
+    bttvEndpoints.forEach(
       (endpoint) => {
         $.getJSON(
           addRandomQueryString("https://api.betterttv.net/3/cached/" + endpoint)
@@ -245,7 +410,7 @@ Chat = {
             res = res.channelEmotes.concat(res.sharedEmotes);
           }
           res.forEach((emote) => {
-            Chat.info.emotes[emote.code] = {
+            const emoteObj = {
               id: emote.id,
               image: "https://cdn.betterttv.net/emote/" + emote.id + "/3x",
               zeroWidth: [
@@ -258,49 +423,60 @@ Chat = {
                 "58487cc6f52be01a7ee5f205",
                 "5849c9c8f52be01a7ee5f79e",
               ].includes(emote.id),
-              // "5e76d338d6581c3724c0f0b2" => cvHazmat, "5e76d399d6581c3724c0f0b8" => cvMask, "567b5b520e984428652809b6" => SoSnowy, "5849c9a4f52be01a7ee5f79d" => IceCold, "567b5c080e984428652809ba" => CandyCane, "567b5dc00e984428652809bd" => ReinDeer, "58487cc6f52be01a7ee5f205" => SantaHat, "5849c9c8f52be01a7ee5f79e" => TopHat
             };
+            if (channelOnly) {
+              Chat.registerChannelThirdPartyEmote(emote.code, emoteObj);
+            } else {
+              Chat.info.emotes[emote.code] = emoteObj;
+            }
           });
+          Chat.purgeDisallowedThirdPartyEmotes();
         });
       }
     );
 
     $.getJSON(addRandomQueryString("https://7tv.io/v3/emote-sets/global")).done(
       (res) => {
+        if (Chat.info.seventvChannelOnly) return;
         res?.emotes?.forEach((emote) => {
           const emoteData = emote.data.host.files.pop();
           var link = `https:${emote.data.host.url}/${emoteData.name}`;
-          // if link ends in .gif replace with .webp
           if (link.endsWith(".gif")) link = link.replace(".gif", ".webp")
-          Chat.info.emotes[emote.name] = {
+          Chat.registerSevenTvEmote(emote.name, {
             id: emote.id,
             image: link,
             zeroWidth: emote.data.flags == 256,
-          };
+          }, false);
         });
       }
     );
 
-    $.getJSON(
-      addRandomQueryString(
-        "https://7tv.io/v3/users/twitch/" + encodeURIComponent(channelID)
-      )
-    ).done((res) => {
-      res?.emote_set?.emotes?.forEach((emote) => {
-        const emoteData = emote.data.host.files.pop();
-        var link = `https:${emote.data.host.url}/${emoteData.name}`;
-        // if link ends in .gif replace with .webp
-        if (link.endsWith(".gif")) link = link.replace(".gif", ".webp")
-        Chat.info.emotes[emote.name] = {
-          id: emote.id,
-          image: link,
-          zeroWidth: emote.data.flags == 256,
-        };
+    if (watchLogin) {
+      $.getJSON(
+        addRandomQueryString(
+          "https://7tv.io/v3/users/twitch/" + encodeURIComponent(watchLogin)
+        )
+      ).done((res) => {
+        console.log("7TV channel emotes loaded for login:", watchLogin);
+        res?.emote_set?.emotes?.forEach((emote) => {
+          const emoteData = emote.data.host.files.pop();
+          var link = `https:${emote.data.host.url}/${emoteData.name}`;
+          if (link.endsWith(".gif")) link = link.replace(".gif", ".webp");
+          Chat.registerSevenTvEmote(emote.name, {
+            id: emote.id,
+            image: link,
+            zeroWidth: emote.data.flags == 256,
+          }, true);
+        });
+        Chat.purgeDisallowedThirdPartyEmotes();
       });
-    });
+    }
   },
 
   loadPersonalEmotes: async function (channelID) {
+    if (Chat.info.seventvChannelOnly) {
+      return;
+    }
     var subbed = await isUserSubbed(channelID);
     if (!subbed) {
       return;
@@ -476,7 +652,8 @@ Chat = {
       if (!error) {
         console.log("User ID: " + res.data[0].id);
         Chat.info.channelID = res.data[0].id;
-        Chat.loadEmotes(Chat.info.channelID);
+        Chat.info.channel = (Chat.info.channel || res.data[0].login || config.channel || "").trim().toLowerCase();
+        Chat.loadEmotes(Chat.info.channelID, Chat.info.channel);
         seven_ws(Chat.info.channel);
 
         client_id = res.client_id;
@@ -1174,6 +1351,16 @@ Chat = {
 
       const shouldHighlight = Chat.info.highlightUsers && (isExplicitlyAllowed || allowOtherBasedOnTags);
 
+      let shouldHighlightWord = false;
+      if (Chat.info.highlightFavoriteWords && Chat.info.favoriteWords && Chat.info.favoriteWords.length > 0) {
+        const lowerMessage = message.toLowerCase();
+        shouldHighlightWord = Chat.info.favoriteWords.some((word) => {
+          if (!word) return false;
+          const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          return new RegExp(`\\b${escaped}\\b`, "i").test(lowerMessage);
+        });
+      }
+
       // Sound Notification Logic
       if (Chat.info.playSound && window.chrome && window.chrome.webview && window.chrome.webview.hostObjects) {
           let shouldPlaySound = (!Chat.info.highlightUsers && !Chat.info.allowedUsersOnly) ||
@@ -1195,6 +1382,9 @@ Chat = {
       // Apply new classes natively
       if (shouldHighlight) {
           $chatLine.addClass(highlightClass || 'highlight');
+      }
+      if (shouldHighlightWord) {
+          $chatLine.addClass('highlightWord');
       }
       if (isSharedChat) {
           $chatLine.addClass('home-chatter');
@@ -1505,7 +1695,9 @@ Chat = {
             // console.log("7tv checker expired so checking again");
             Chat.loadUserBadges(nick, info["user-id"]);
             Chat.loadUserPaints(nick, info["user-id"]);
-            Chat.loadPersonalEmotes(info["user-id"]);
+            if (!Chat.info.seventvChannelOnly) {
+              Chat.loadPersonalEmotes(info["user-id"]);
+            }
             const data = {
               enabled: true,
               timestamp: Date.now(),
@@ -1538,7 +1730,9 @@ Chat = {
 
       // Replacing emotes and cheers
       var replacements = {};
-      if (typeof info.emotes === "string") {
+      // In channel-only mode we do NOT render Twitch's own tagged emotes
+      // (global Twitch, smileys, sub emotes). Only the watched channel's 7TV set is allowed.
+      if (typeof info.emotes === "string" && !Chat.info.seventvChannelOnly) {
         try {
           // Debug log for emote string format
           // console.log("[Emote Debug] Processing emotes string:", info.emotes);
@@ -1612,7 +1806,7 @@ Chat = {
         }
 
         // Check personal emotes if not YouTube
-        if (!isReplaced && service !== "youtube" && Chat.info.seventvPersonalEmotes[info["user-id"]]) {
+        if (!isReplaced && service !== "youtube" && !Chat.info.seventvChannelOnly && Chat.info.seventvPersonalEmotes[info["user-id"]]) {
           Object.entries(Chat.info.seventvPersonalEmotes[info["user-id"]]).forEach((emote) => {
             if (word === emote[0]) {
               let replacement;
@@ -1632,18 +1826,19 @@ Chat = {
         // Check global emotes
         if (!isReplaced) {
           Object.entries(Chat.info.emotes).forEach((emote) => {
-            if (word === emote[0]) {
-              let replacement;
-              if (emote[1].upscale) {
-                replacement = `<img class="emote upscale" src="${emote[1].image}"/>`;
-              } else if (emote[1].zeroWidth) {
-                replacement = `<img class="emote" data-zw="true" src="${emote[1].image}"/>`;
-              } else {
-                replacement = `<img class="emote" src="${emote[1].image}"/>`;
-              }
-              replacedWord = replacement;
-              isReplaced = true;
+            if (word !== emote[0]) return;
+            if (!Chat.shouldAllowThirdPartyEmote(emote[0], emote[1].image)) return;
+
+            let replacement;
+            if (emote[1].upscale) {
+              replacement = `<img class="emote upscale" src="${emote[1].image}"/>`;
+            } else if (emote[1].zeroWidth) {
+              replacement = `<img class="emote" data-zw="true" src="${emote[1].image}"/>`;
+            } else {
+              replacement = `<img class="emote" src="${emote[1].image}"/>`;
             }
+            replacedWord = replacement;
+            isReplaced = true;
           });
         }
 
@@ -1762,6 +1957,7 @@ Chat = {
         message = window.twemoji.parse(message);
       }
       $message.html(message);
+      Chat.sanitizeChannelOnlyEmotes($message);
 
       if (Chat.info.bigSoloEmotes) {
         // Clone the message content for checking
@@ -1925,6 +2121,7 @@ Chat = {
 
       // Finalize the message HTML
       $message.html(message);
+      Chat.sanitizeChannelOnlyEmotes($message);
 
       // Wrap text nodes in .text-content spans
       const wrapTextNodes = function($element) {
@@ -1975,76 +2172,128 @@ Chat = {
 
   clearMessage: function (id) {
     setTimeout(function () {
-      $(".chat_line[data-id=" + id + "]").remove();
+      $(".chat_line[data-id='" + id + "']").remove();
     }, 100);
   },
 
-  connect: function (channel) {
-    Chat.info.channel = channel;
+  handleEventSubMessage: function (payload) {
+    if (!payload || !payload.nick || !payload.message) return;
+
+    Chat.info.receivedEventSubMessage = true;
+    if (Chat.info.eventSubFallbackTimer) {
+      clearTimeout(Chat.info.eventSubFallbackTimer);
+      Chat.info.eventSubFallbackTimer = null;
+    }
+
+    const tags = payload.tags || {};
+    const info = {
+      id: tags.id || tags.messageId || "",
+      badges: tags.badges || "",
+      color: tags.color || "",
+      emotes: tags.emotes || "",
+      mod: tags.mod || "0",
+      subscriber: tags.subscriber || "0",
+      vip: tags.vip || "0",
+      "display-name": tags.displayName || payload.nick,
+      "user-id": tags.userId || tags.user_id || "",
+      "room-id": tags.roomId || tags.room_id || Chat.info.channelID || "",
+      "source-room-id": tags.sourceRoomId || tags.source_room_id || ""
+    };
+
+    Chat.write(payload.nick, info, payload.message, "twitch");
+  },
+
+  start: function (channel) {
+    Chat.info.channel = String(channel || config.channel || "").trim().toLowerCase();
     var title = $(document).prop("title");
     $(document).prop("title", title + Chat.info.channel);
 
     Chat.load(function () {
-      SendInfoText("Starting Native Chat");
-      console.log("Native Chat: Connecting to IRC server...");
-      var socket = new ReconnectingWebSocket(
-        "wss://irc-ws.chat.twitch.tv",
-        "irc",
-        { reconnectInterval: 2000 }
+      if (Chat.info.useEventSubChat) {
+        SendInfoText("Connected via EventSub");
+        Chat.info.connected = true;
+        console.log("Native Chat: EventSub mode active, IRC disabled.");
+
+        Chat.info.eventSubFallbackTimer = setTimeout(function () {
+          if (!Chat.info.receivedEventSubMessage) {
+            console.warn("No EventSub messages received; falling back to IRC.");
+            SendInfoText("EventSub unavailable — using IRC");
+            Chat.info.useEventSubChat = false;
+            Chat.connectIrc();
+          }
+        }, 15000);
+        return;
+      }
+
+      Chat.connectIrc();
+    });
+  },
+
+  connect: function (channel) {
+    Chat.start(channel);
+  },
+
+  connectIrc: function () {
+    SendInfoText("Starting Native Chat");
+    console.log("Native Chat: Connecting to IRC server...");
+    var socket = new ReconnectingWebSocket(
+      "wss://irc-ws.chat.twitch.tv",
+      "irc",
+      { reconnectInterval: 2000 }
+    );
+
+    socket.onopen = function () {
+      console.log("Native Chat: Connected");
+      socket.send("PASS native\r\n");
+      socket.send(
+        "NICK justinfan" + Math.floor(Math.random() * 99999) + "\r\n"
       );
+      socket.send("CAP REQ :twitch.tv/commands twitch.tv/tags\r\n");
+      socket.send("JOIN #" + Chat.info.channel + "\r\n");
+    };
 
-      socket.onopen = function () {
-        console.log("Native Chat: Connected");
-        socket.send("PASS native\r\n");
-        socket.send(
-          "NICK justinfan" + Math.floor(Math.random() * 99999) + "\r\n"
-        );
-        socket.send("CAP REQ :twitch.tv/commands twitch.tv/tags\r\n");
-        socket.send("JOIN #" + Chat.info.channel + "\r\n");
-      };
+    socket.onclose = function () {
+      console.log("Native Chat: Disconnected");
+    };
 
-      socket.onclose = function () {
-        console.log("Native Chat: Disconnected");
-      };
+    socket.onmessage = function (data) {
+      data.data.split("\r\n").forEach((line) => {
+        if (!line) return;
+        var message = window.parseIRC(line);
+        if (!message.command) return;
 
-      socket.onmessage = function (data) {
-        data.data.split("\r\n").forEach((line) => {
-          if (!line) return;
-          var message = window.parseIRC(line);
-          if (!message.command) return;
-
-          switch (message.command) {
-            case "PING":
-              socket.send("PONG " + message.params[0]);
+        switch (message.command) {
+          case "PING":
+            socket.send("PONG " + message.params[0]);
+            return;
+          case "JOIN":
+            console.log("Native Chat: Joined channel #" + Chat.info.channel);
+            if (!Chat.info.connected) {
+              Chat.info.connected = true;
+              SendInfoText("Connected to " + Chat.info.channel);
+            }
+            return;
+          case "CLEARMSG":
+            if (message.tags)
+              Chat.clearMessage(message.tags["target-msg-id"]);
+            return;
+          case "CLEARCHAT":
+            console.log(message);
+            if (message.params[1]) {
+              Chat.clearChat(message.params[1]);
+              console.log("Native Chat: Clearing chat of " + message.params[1]);
+            } else {
+              Chat.clearWholeChat();
+              console.log("Native Chat: Clearing chat...");
+            }
+            return;
+          case "PRIVMSG":
+            if (!message.params[1])
               return;
-            case "JOIN":
-              console.log("Native Chat: Joined channel #" + Chat.info.channel);
-              if (!Chat.info.connected) {
-                Chat.info.connected = true;
-                SendInfoText("Connected to " + Chat.info.channel);
-              }
-              return;
-            case "CLEARMSG":
-              if (message.tags)
-                Chat.clearMessage(message.tags["target-msg-id"]);
-              return;
-            case "CLEARCHAT":
-              console.log(message);
-              if (message.params[1]) {
-                Chat.clearChat(message.params[1]);
-                console.log("Native Chat: Clearing chat of " + message.params[1]);
-              } else {
-                Chat.clearWholeChat();
-                console.log("Native Chat: Clearing chat...");
-              }
-              return;
-            case "PRIVMSG":
-              if (!message.params[1])
-                return;
-              
-              var nick = Chat.sanitizeUsername(message.prefix.split("@")[0].split("!")[0]);
+            
+            var nick = Chat.sanitizeUsername(message.prefix.split("@")[0].split("!")[0]);
 
-              // #region COMMANDS
+            // #region COMMANDS
 
               // #region REFRESH EMOTES
               if (
@@ -2064,7 +2313,7 @@ Chat = {
                 
                 if (flag) {
                   SendInfoText("Refreshing emotes...");
-                  Chat.loadEmotes(Chat.info.channelID);
+                  Chat.loadEmotes(Chat.info.channelID, Chat.info.channel);
                   console.log("Native Chat: Refreshing emotes...");
                   return;
                 }
@@ -2361,7 +2610,10 @@ Chat = {
                     
                   } else {
                     // First check if the user has personal 7tv emotes
-                    if (Chat.info.seventvPersonalEmotes[message.tags["user-id"]]) {
+                    if (
+                      !Chat.info.seventvChannelOnly &&
+                      Chat.info.seventvPersonalEmotes[message.tags["user-id"]]
+                    ) {
                       let personalEmote = null;
                       Object.entries(Chat.info.seventvPersonalEmotes[message.tags["user-id"]]).forEach((emote) => {
                         if (imageSource === emote[0]) {
@@ -2449,7 +2701,9 @@ Chat = {
 
                     // Check if it's an emote from the available emotes
                     const emoteFound = Object.entries(Chat.info.emotes).find(
-                      ([emoteName]) => emoteName.toLowerCase() === imageSource.toLowerCase()
+                      ([emoteName, emoteData]) =>
+                        emoteName.toLowerCase() === imageSource.toLowerCase() &&
+                        Chat.shouldAllowThirdPartyEmote(emoteName, emoteData.image)
                     );
                     
                     if (emoteFound) {
@@ -2543,6 +2797,7 @@ Chat = {
               }
 
               if (
+                !Chat.info.seventvChannelOnly &&
                 !Chat.info.seventvPersonalEmotes[message.tags["user-id"]] &&
                 !Chat.info.seventvNoUsers[message.tags["user-id"]] &&
                 !Chat.info.seventvNonSubs[message.tags["user-id"]]
@@ -2563,7 +2818,6 @@ Chat = {
           }
         });
       };
-    });
   },
 };
 

@@ -10,18 +10,7 @@ public static class ChatProviderFactory
 {
     public static IChatProvider Create(ChatTypes chatType)
     {
-        switch (chatType)
-        {
-            case ChatTypes.KapChat:
-                return new KapChatProvider();
-            case ChatTypes.TwitchPopout:
-                return new TwitchPopoutProvider();
-            case ChatTypes.CustomURL:
-                return new CustomProvider();
-            case ChatTypes.NativeChat:
-                return new NativeChatProvider();
-            default:
-                throw new NotSupportedException($"Chat type {chatType} is not supported.");
-        }
+        // Personal fork: NativeChat only
+        return new NativeChatProvider();
     }
 }
