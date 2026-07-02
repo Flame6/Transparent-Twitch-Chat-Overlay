@@ -285,6 +285,40 @@ Chat = {
     Chat.info.emotes[name] = emoteObj;
   },
 
+  stripImageQuery: function (src) {
+    return String(src || "").split("?")[0];
+  },
+
+  getAllowedEmoteImageSet: function () {
+    const allowed = new Set();
+    Object.values(Chat.info.seventvChannelEmotes || {}).forEach((e) => {
+      if (e && e.image) allowed.add(Chat.stripImageQuery(e.image));
+    });
+    Object.values(Chat.info.channelThirdPartyEmotes || {}).forEach((e) => {
+      if (e && e.image) allowed.add(Chat.stripImageQuery(e.image));
+    });
+    return allowed;
+  },
+
+  // Safety net: after message HTML is built, remove any emote image that is not
+  // part of the watched channel's allowed emote set when channel-only mode is on.
+  sanitizeChannelOnlyEmotes: function ($message) {
+    if (!Chat.info.seventvChannelOnly || !$message) return;
+
+    const allowed = Chat.getAllowedEmoteImageSet();
+    $message.find("img.emote, img.emoji").each(function () {
+      const src = Chat.stripImageQuery($(this).attr("src"));
+      if (!allowed.has(src)) {
+        const alt = $(this).attr("alt");
+        if (alt) {
+          $(this).replaceWith(document.createTextNode(alt));
+        } else {
+          $(this).remove();
+        }
+      }
+    });
+  },
+
   purgeDisallowedThirdPartyEmotes: function () {
     if (!Chat.info.seventvChannelOnly) return;
 
@@ -1696,7 +1730,9 @@ Chat = {
 
       // Replacing emotes and cheers
       var replacements = {};
-      if (typeof info.emotes === "string") {
+      // In channel-only mode we do NOT render Twitch's own tagged emotes
+      // (global Twitch, smileys, sub emotes). Only the watched channel's 7TV set is allowed.
+      if (typeof info.emotes === "string" && !Chat.info.seventvChannelOnly) {
         try {
           // Debug log for emote string format
           // console.log("[Emote Debug] Processing emotes string:", info.emotes);
@@ -1921,6 +1957,7 @@ Chat = {
         message = window.twemoji.parse(message);
       }
       $message.html(message);
+      Chat.sanitizeChannelOnlyEmotes($message);
 
       if (Chat.info.bigSoloEmotes) {
         // Clone the message content for checking
@@ -2084,6 +2121,7 @@ Chat = {
 
       // Finalize the message HTML
       $message.html(message);
+      Chat.sanitizeChannelOnlyEmotes($message);
 
       // Wrap text nodes in .text-content spans
       const wrapTextNodes = function($element) {
